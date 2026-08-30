@@ -6,7 +6,7 @@ A premium, dark-glassmorphism web app for inspecting and downloading **publicly 
 
 ---
 
-## ✨ Features
+## Features
 
 - **Analyze any public media URL** — resolution, FPS, codecs, container, duration, thumbnail, and estimated size.
 - **Every exposed stream, listed as a card** — separate sections for video streams and audio-only streams, each with a one-click download.
@@ -17,7 +17,7 @@ A premium, dark-glassmorphism web app for inspecting and downloading **publicly 
 
 ---
 
-## 🧱 Tech Stack
+## Tech Stack
 
 | Layer    | Technology |
 |----------|------------|
@@ -31,7 +31,7 @@ yt-dlp is an open-source media metadata extractor used purely to **ask a site wh
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 media-downloader-pro/
@@ -67,7 +67,7 @@ media-downloader-pro/
 
 ---
 
-## 🚀 Getting Started (Local Development)
+## Getting Started (Local Development)
 
 ### Prerequisites
 
@@ -102,7 +102,7 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## 🐳 Docker
+## Docker
 
 Build and run the full stack (frontend on Nginx + backend) with one command from the project root:
 
@@ -123,7 +123,7 @@ docker compose down
 
 ---
 
-## ⚙️ Environment Variables
+## Environment Variables
 
 ### Backend (`backend/.env`)
 
@@ -147,7 +147,7 @@ docker compose down
 
 ---
 
-## 🔌 API Reference
+## API Reference
 
 | Method | Route | Description |
 |---|---|---|
@@ -163,7 +163,7 @@ docker compose down
 
 ---
 
-## 🛡️ Responsible Use
+## Responsible Use
 
 - The app only lists streams that the source already exposes publicly.
 - DRM-protected, encrypted, login-gated, or otherwise access-controlled media is detected and reported as **not downloadable** — the app never attempts decryption or circumvention.
@@ -171,7 +171,7 @@ docker compose down
 
 ---
 
-## 🧪 Type Checking & Linting
+## Type Checking & Linting
 
 ```bash
 # Backend
@@ -181,7 +181,7 @@ cd backend && npm run typecheck && npm run lint
 cd frontend && npm run typecheck && npm run lint
 ```
 
-## 🏗️ Production Build (without Docker)
+## Production Build (without Docker)
 
 ```bash
 # Backend
@@ -197,6 +197,6 @@ npm run preview
 
 ---
 
-## 📄 License
+## License
 
 This project is provided as-is for educational and personal-use purposes. Ensure your use complies with the terms of service of any source site and applicable law.
