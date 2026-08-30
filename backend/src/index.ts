@@ -9,10 +9,20 @@ import { execFileSync } from 'child_process';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import mediaRoutes from './routes/media.routes';
 import downloadRoutes from './routes/download.routes';
+import { startCleanupTask } from './utils/cleanup';
 
 const app: Express = express();
+startCleanupTask();
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'frame-ancestors': ["'self'", env.corsOrigin],
+    },
+  },
+}));
 app.use(
   cors({
     origin: env.corsOrigin,
