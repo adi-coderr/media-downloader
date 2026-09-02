@@ -1,27 +1,33 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { Response } from 'express';
-import { env } from '../config/env';
-import { logger } from '../utils/logger';
-import * as fs from 'fs';
-import * as path from 'path';
 import { nanoid } from 'nanoid';
+import { env } from '../config/env';
 import { DownloadJob } from '../types/media.types';
+import { logger } from '../utils/logger';
 
-const jobs = new Map<string, DownloadJob & { filePath?: string; child?: ReturnType<typeof spawn> }>();
+type Job = DownloadJob & { ytDlp?: ChildProcessWithoutNullStreams; ffmpeg?: ChildProcessWithoutNullStreams };
+const jobs = new Map<string, Job>();
 
 export function createDownloadJob(
-  sourceUrl: string, filename: string, kind: 'video' | 'audio', mode: 'download' | 'clip',
-  formatId?: string, startTime?: number, endTime?: number, outputResolution?: string,
+  res: Response,
+  sourceUrl: string,
+  filename: string,
+  kind: 'video' | 'audio',
+  mode: 'download' | 'clip',
+  formatId?: string,
+  startTime?: number,
+  endTime?: number,
+  outputResolution?: string,
 ): DownloadJob {
-  const id = nanoid(12);
   const now = Date.now();
-  const job: DownloadJob & { filePath?: string; child?: ReturnType<typeof spawn> } = {
-    id, sourceStreamUrl: sourceUrl, suggestedFilename: filename, status: 'queued',
+  const job: Job = {
+    id: nanoid(12), sourceStreamUrl: sourceUrl, suggestedFilename: filename, status: 'queued',
     totalBytes: null, downloadedBytes: 0, speedBytesPerSec: 0, startedAt: now, updatedAt: now,
     mode, startTime, endTime, outputResolution,
   };
-  jobs.set(id, job);
-  void runDownloadJob(job, sourceUrl, filename, kind, mode, formatId, startTime, endTime);
+  jobs.set(job.id, job);
+  res.setHeader('X-Download-Id', job.id);
+  void streamMedia(res, sourceUrl, filename, kind, mode, formatId, startTime, endTime, outputResolution, job);
   return publicJob(job);
 }
 
@@ -30,75 +36,9 @@ export function getDownloadJob(id: string): DownloadJob | undefined {
   return job ? publicJob(job) : undefined;
 }
 
-export function getDownloadFile(id: string): { job: DownloadJob; filePath: string } | undefined {
-  const job = jobs.get(id);
-  if (!job || job.status !== 'completed' || !job.filePath) return undefined;
-  return { job: publicJob(job), filePath: job.filePath };
-}
-
-function publicJob(job: DownloadJob): DownloadJob {
-  const { child: _child, filePath: _filePath, ...safeJob } = job as DownloadJob & { child?: unknown; filePath?: string };
+function publicJob(job: Job): DownloadJob {
+  const { ytDlp: _ytDlp, ffmpeg: _ffmpeg, ...safeJob } = job;
   return safeJob;
-}
-
-async function runDownloadJob(
-  job: DownloadJob & { filePath?: string; child?: ReturnType<typeof spawn> },
-  sourceUrl: string, filename: string, kind: 'video' | 'audio', mode: 'download' | 'clip',
-  formatId?: string, startTime?: number, endTime?: number,
-): Promise<void> {
-  const ext = kind === 'audio' ? 'm4a' : 'mp4';
-  const safeName = filename.replace(/\.[^/.]+$/, '') + `.${ext}`;
-  const formatSelector = kind === 'audio'
-    ? formatId ?? 'bestaudio[ext=m4a]/bestaudio/best'
-    : formatId ? `${formatId}+bestaudio/${formatId}` : 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
-  fs.mkdirSync(env.downloadStagingDir, { recursive: true });
-  const tempFile = path.join(env.downloadStagingDir, `${job.id}.${ext}`);
-  const args = [
-    '-f', formatSelector, '--no-warnings', '--newline',
-    '--progress-template', 'download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s',
-    '--ffmpeg-location', env.ffmpegPath, '--extractor-args', 'youtube:player_client=web_embedded,mweb,tv',
-    '--downloader', 'aria2c', '--downloader-args', 'aria2c:-x 16 -s 16 -k 1M', '--merge-output-format', ext, '-o', tempFile,
-  ];
-  if (mode === 'clip' && startTime !== undefined) {
-    args.push('--download-sections', `*${Math.max(0, startTime)}-${Math.max(startTime + 0.1, endTime ?? startTime + 0.1)}`);
-  }
-  args.push(sourceUrl);
-  job.status = 'downloading';
-  job.updatedAt = Date.now();
-  const child = spawn(env.ytDlpPath, args);
-  job.child = child;
-  let output = '';
-  child.stdout.on('data', (data: Buffer) => {
-    output += data.toString();
-    const lines = output.split(/\r?\n/);
-    output = lines.pop() ?? '';
-    for (const line of lines) {
-      const match = line.match(/^download:(\d+)\|([^|]+)\|([^|]+)$/);
-      if (!match) continue;
-      const downloaded = Number(match[1]);
-      const total = Number(match[2]);
-      const speed = Number(match[3]);
-      if (Number.isFinite(downloaded)) job.downloadedBytes = downloaded;
-      if (Number.isFinite(total) && total > 0) job.totalBytes = total;
-      if (Number.isFinite(speed) && speed > 0) job.speedBytesPerSec = speed;
-      job.updatedAt = Date.now();
-    }
-  });
-  child.stderr.on('data', (data: Buffer) => logger.warn('yt-dlp stderr', { data: data.toString().trim(), jobId: job.id }));
-  const exitCode = await new Promise<number | null>((resolve) => {
-    child.on('close', resolve);
-    child.on('error', () => resolve(1));
-  });
-  job.child = undefined;
-  if (exitCode !== 0) {
-    job.status = 'error'; job.error = 'The media download failed.'; job.updatedAt = Date.now(); cleanupTempFiles(tempFile); return;
-  }
-  const actualFile = findOutputFile(tempFile, job.id, env.downloadStagingDir);
-  if (!actualFile) { job.status = 'error'; job.error = 'Downloaded file was not found.'; job.updatedAt = Date.now(); return; }
-  job.filePath = actualFile;
-  job.downloadedBytes = fs.statSync(actualFile).size;
-  job.totalBytes = job.downloadedBytes;
-  job.status = 'completed'; job.updatedAt = Date.now(); job.suggestedFilename = safeName;
 }
 
 export async function streamMedia(
@@ -111,139 +51,95 @@ export async function streamMedia(
   startTime?: number,
   endTime?: number,
   _outputResolution?: string,
+  job?: Job,
 ): Promise<void> {
-  const ext = kind === 'audio' ? 'm4a' : 'mp4';
-  const safeName = filename.replace(/\.[^/.]+$/, '') + `.${ext}`;
-
-  let formatSelector: string;
-  if (kind === 'audio') {
-    formatSelector = formatId ?? 'bestaudio[ext=m4a]/bestaudio/best';
-  } else if (formatId) {
-    formatSelector = `${formatId}+bestaudio/${formatId}`;
-  } else {
-    formatSelector = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
+  const extension = kind === 'audio' ? 'm4a' : 'mp4';
+  const safeName = filename.replace(/\.[^/.]+$/, '') + `.${extension}`;
+  const formatSelector = kind === 'audio'
+    ? formatId ?? 'bestaudio[ext=m4a]/bestaudio/best'
+    : formatId ? `${formatId}+bestaudio/${formatId}` : 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
+  const ytDlpArgs = [
+    '-f', formatSelector, '--no-warnings', '--newline',
+    '--progress-template', 'download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s',
+    '--concurrent-fragments', '8', '--ffmpeg-location', env.ffmpegPath,
+    '--extractor-args', 'youtube:player_client=web_embedded,mweb,tv',
+    '--downloader', 'aria2c', '--downloader-args', 'aria2c:-x 16 -s 16 -k 1M',
+    '-o', '-', sourceUrl,
+  ];
+  if (mode === 'clip' && startTime !== undefined) {
+    ytDlpArgs.splice(-2, 0, '--download-sections', `*${Math.max(0, startTime)}-${Math.max(startTime + 0.1, endTime ?? startTime + 0.1)}`);
   }
 
-  logger.info('streamMedia', { formatId, kind, formatSelector, mode });
-
-  // Send download headers IMMEDIATELY so the browser shows the download bar
   res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeName)}"`);
-  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Type', kind === 'audio' ? 'audio/mp4' : 'video/mp4');
   res.setHeader('Transfer-Encoding', 'chunked');
   res.flushHeaders();
 
-  logger.info('Response headers flushed — browser download bar should appear');
-
-  // Ensure staging dir exists
-  if (!fs.existsSync(env.downloadStagingDir)) {
-    fs.mkdirSync(env.downloadStagingDir, { recursive: true });
+  const ytDlp = spawn(env.ytDlpPath, ytDlpArgs);
+  const ffmpeg = spawn(env.ffmpegPath, [
+    '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-map', '0', '-c', 'copy',
+    '-f', kind === 'audio' ? 'ipod' : 'mp4',
+    ...(kind === 'video' ? ['-movflags', 'frag_keyframe+empty_moov'] : []), 'pipe:1',
+  ]);
+  if (job) {
+    job.status = 'downloading'; job.updatedAt = Date.now(); job.ytDlp = ytDlp; job.ffmpeg = ffmpeg;
   }
 
-  const tempId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
-  const tempFile = path.join(env.downloadStagingDir, `${tempId}.${ext}`);
-
-  const downloadArgs = [
-    '-f', formatSelector,
-    '--no-warnings',
-    '--ffmpeg-location', env.ffmpegPath,
-    '--extractor-args', 'youtube:player_client=web_embedded,mweb,tv',
-    '--downloader', 'aria2c',
-    '--downloader-args', 'aria2c:-x 16 -s 16 -k 1M',
-    '--merge-output-format', ext,
-    '-o', tempFile,
-  ];
-
-  if (mode === 'clip' && startTime !== undefined) {
-    const start = Math.max(0, startTime);
-    const end = Math.max(start + 0.1, endTime ?? start + 0.1);
-    downloadArgs.push('--download-sections', `*${start}-${end}`);
-  }
-
-  downloadArgs.push(sourceUrl);
-
-  logger.info('Starting yt-dlp download', { args: downloadArgs });
-
-  const child = spawn(env.ytDlpPath, downloadArgs);
-  let clientDisconnected = false;
-
-  child.stderr.on('data', (data: Buffer) => {
-    logger.warn('yt-dlp stderr', { data: data.toString().trim() });
+  let progressBuffer = '';
+  ytDlp.stderr.on('data', (data: Buffer) => {
+    const text = data.toString();
+    progressBuffer += text;
+    const lines = progressBuffer.split(/\r?\n/);
+    progressBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const match = line.match(/^download:(\d+)\|([^|]+)\|([^|]+)$/);
+      if (!match || !job) continue;
+      const downloaded = Number(match[1]);
+      const total = Number(match[2]);
+      const speed = Number(match[3]);
+      if (Number.isFinite(downloaded)) job.downloadedBytes = downloaded;
+      if (Number.isFinite(total) && total > 0) job.totalBytes = total;
+      if (Number.isFinite(speed) && speed > 0) job.speedBytesPerSec = speed;
+      job.updatedAt = Date.now();
+    }
+    logger.debug('yt-dlp output', { jobId: job?.id, output: text.trim() });
   });
+  ytDlp.stderr.on('error', (error) => logger.error('yt-dlp stderr error', { error: String(error), jobId: job?.id }));
+  ffmpeg.stderr.on('data', (data: Buffer) => logger.warn('ffmpeg stderr', { data: data.toString().trim(), jobId: job?.id }));
+  ytDlp.stdout.pipe(ffmpeg.stdin);
+  ffmpeg.stdout.pipe(res);
 
+  let finished = false;
+  const terminate = (): void => {
+    if (!ytDlp.killed) ytDlp.kill('SIGKILL');
+    if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
+  };
+  const fail = (message: string): void => {
+    if (finished) return;
+    finished = true; terminate();
+    if (job) { job.status = 'error'; job.error = message; job.updatedAt = Date.now(); }
+    if (!res.writableEnded) res.destroy(new Error(message));
+  };
   res.on('close', () => {
-    clientDisconnected = true;
-    if (!child.killed) {
-      logger.info('Client disconnected, killing yt-dlp');
-      child.kill('SIGKILL');
+    if (!finished) terminate();
+  });
+  ytDlp.on('error', () => fail('yt-dlp could not start or stopped unexpectedly.'));
+  ffmpeg.on('error', () => fail('FFmpeg could not start or stopped unexpectedly.'));
+  ytDlp.on('close', (code) => {
+    if (code !== 0 && !finished) fail(`yt-dlp exited with code ${code ?? 'unknown'}.`);
+  });
+  ffmpeg.on('close', (code) => {
+    if (finished) return;
+    finished = true;
+    if (code !== 0) {
+      if (job) { job.status = 'error'; job.error = `FFmpeg exited with code ${code ?? 'unknown'}.`; job.updatedAt = Date.now(); }
+      if (!res.writableEnded) res.destroy(new Error('FFmpeg failed while processing the media.'));
+      return;
     }
-    cleanupTempFiles(tempFile);
-  });
-
-  const exitCode = await new Promise<number | null>((resolve) => {
-    child.on('close', (code) => resolve(code));
-    child.on('error', (err) => {
-      logger.error('yt-dlp spawn error', { err: String(err) });
-      resolve(1);
-    });
-  });
-
-  if (clientDisconnected) return;
-
-  if (exitCode !== 0) {
-    logger.error('yt-dlp failed', { exitCode });
-    res.end();
-    cleanupTempFiles(tempFile);
-    return;
-  }
-
-  // Find the actual output file (yt-dlp may change extension during merge)
-  const actualFile = findOutputFile(tempFile, tempId, env.downloadStagingDir);
-
-  if (!actualFile) {
-    logger.error('Downloaded file not found', { tempFile });
-    res.end();
-    return;
-  }
-
-  logger.info('Download complete, streaming to client', { actualFile, size: fs.statSync(actualFile).size });
-
-  const readStream = fs.createReadStream(actualFile);
-  readStream.pipe(res);
-
-  readStream.on('end', () => {
-    logger.info('File streamed to client successfully');
-    try { fs.unlinkSync(actualFile); } catch { /* ignore */ }
-  });
-
-  readStream.on('error', (err) => {
-    logger.error('Error streaming file', { err: String(err) });
+    if (job) {
+      job.status = 'completed'; job.updatedAt = Date.now();
+      if (job.totalBytes === null) job.totalBytes = job.downloadedBytes;
+    }
     if (!res.writableEnded) res.end();
-    try { fs.unlinkSync(actualFile); } catch { /* ignore */ }
   });
-}
-
-function findOutputFile(expectedPath: string, tempId: string, stagingDir: string): string | null {
-  if (fs.existsSync(expectedPath)) return expectedPath;
-  try {
-    const files = fs.readdirSync(stagingDir);
-    for (const f of files) {
-      if (f.startsWith(tempId) && !f.endsWith('.part')) {
-        return path.join(stagingDir, f);
-      }
-    }
-  } catch { /* ignore */ }
-  return null;
-}
-
-function cleanupTempFiles(tempFile: string) {
-  try {
-    const dir = path.dirname(tempFile);
-    const base = path.basename(tempFile).split('.')[0];
-    const files = fs.readdirSync(dir);
-    for (const f of files) {
-      if (f.startsWith(base)) {
-        try { fs.unlinkSync(path.join(dir, f)); } catch { /* ignore */ }
-      }
-    }
-  } catch { /* ignore */ }
 }

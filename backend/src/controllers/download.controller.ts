@@ -1,23 +1,16 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../utils/asyncHandler';
-import { createDownloadJob, getDownloadFile, getDownloadJob, streamMedia } from '../services/download.service';
+import { createDownloadJob, getDownloadJob, streamMedia } from '../services/download.service';
 
 export const createDownload = asyncHandler(async (req: Request, res: Response) => {
   const { sourceUrl, filename, streamType, mode, formatId, startTime, endTime, outputResolution } = req.body;
-  const job = createDownloadJob(sourceUrl, filename, streamType ?? 'video', mode ?? 'download', formatId, startTime, endTime, outputResolution);
-  res.status(202).json({ success: true, job });
+  createDownloadJob(res, sourceUrl, filename, streamType ?? 'video', mode ?? 'download', formatId, startTime, endTime, outputResolution);
 });
 
 export const downloadStatus = asyncHandler(async (req: Request, res: Response) => {
   const job = getDownloadJob(req.params.id);
   if (!job) { res.status(404).json({ message: 'Download job not found.' }); return; }
   res.json({ success: true, job });
-});
-
-export const downloadFile = asyncHandler(async (req: Request, res: Response) => {
-  const result = getDownloadFile(req.params.id);
-  if (!result) { res.status(409).json({ message: 'Download is not complete.' }); return; }
-  res.download(result.filePath, result.job.suggestedFilename);
 });
 
 export const streamDownload = asyncHandler(async (req: Request, res: Response) => {

@@ -24,6 +24,5 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 
-RUN mkdir -p /app/downloads
 EXPOSE 4000
 CMD ["node", "dist/index.js"]

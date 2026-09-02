@@ -1,5 +1,4 @@
 import dotenv from 'dotenv';
-import path from 'path';
 
 dotenv.config();
 
@@ -23,10 +22,5 @@ export const env = {
   ytDlpPath: requireString('YTDLP_PATH', 'yt-dlp'),
   ffmpegPath: requireString('FFMPEG_PATH', 'ffmpeg'),
   inspectTimeoutMs: requireNumber('INSPECT_TIMEOUT_MS', 25_000),
-  downloadMaxConcurrency: requireNumber('DOWNLOAD_MAX_CONCURRENCY', 3),
-  downloadStagingDir: path.resolve(
-    process.cwd(),
-    requireString('DOWNLOAD_STAGING_DIR', './downloads'),
-  ),
   isProduction: requireString('NODE_ENV', 'development') === 'production',
 };

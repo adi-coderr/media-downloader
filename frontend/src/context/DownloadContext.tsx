@@ -1,5 +1,5 @@
 import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
-import { createDownload, CreateDownloadInput, getDownloadFileUrl, getDownloadJob } from '@/api/downloadApi';
+import { createDownload, CreateDownloadInput, getDownloadJob } from '@/api/downloadApi';
 import { DownloadJob } from '@/types/media';
 
 interface DownloadContextValue {
@@ -37,5 +37,3 @@ export function useDownloads(): DownloadContextValue {
   if (!context) throw new Error('useDownloads must be used inside DownloadProvider');
   return context;
 }
-
-export { getDownloadFileUrl };

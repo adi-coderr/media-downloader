@@ -1,5 +1,4 @@
 import { CheckCircle2, CircleAlert, Download, LoaderCircle } from 'lucide-react';
-import { getDownloadFileUrl } from '@/context/DownloadContext';
 import { useDownloads } from '@/context/DownloadContext';
 
 function formatBytes(value: number): string {
@@ -21,7 +20,7 @@ export function DownloadSection(): JSX.Element | null {
             return <div key={job.id}>
               <div className="mb-2 flex items-center justify-between gap-3 text-sm"><span className="truncate text-white/80">{job.suggestedFilename}</span><span className="shrink-0 text-white/50">{job.status === 'completed' ? 'Ready' : job.status === 'error' ? 'Failed' : job.totalBytes ? `${progress.toFixed(0)}%` : 'Preparing...'}</span></div>
               <div className="h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full transition-[width] duration-500 ${job.status === 'error' ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${job.status === 'completed' ? 100 : progress}%` }} /></div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-white/45">{active && <LoaderCircle className="h-3 w-3 animate-spin" />}{job.status === 'completed' && <CheckCircle2 className="h-3 w-3 text-success" />}{job.status === 'error' && <CircleAlert className="h-3 w-3 text-danger" />}<span>{job.totalBytes ? `${formatBytes(job.downloadedBytes)} of ${formatBytes(job.totalBytes)}` : 'Downloading media...'}</span>{job.status === 'completed' && <a className="ml-auto text-primary hover:underline" href={getDownloadFileUrl(job.id)} download={job.suggestedFilename}>Save file</a>}</div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-white/45">{active && <LoaderCircle className="h-3 w-3 animate-spin" />}{job.status === 'completed' && <CheckCircle2 className="h-3 w-3 text-success" />}{job.status === 'error' && <CircleAlert className="h-3 w-3 text-danger" />}<span>{job.totalBytes ? `${formatBytes(job.downloadedBytes)} of ${formatBytes(job.totalBytes)}` : 'Streaming media...'}</span></div>
             </div>;
           })}
         </div>

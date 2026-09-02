@@ -113,7 +113,7 @@ docker compose up --build
 - Frontend: `http://localhost:8080`
 - Backend API (direct): `http://localhost:4000/api/health`
 
-The backend image installs `yt-dlp` and `ffmpeg` automatically during build. Downloaded files are staged in a named Docker volume (`downloads-data`) so partial/completed downloads survive container restarts.
+The backend image installs `yt-dlp`, `ffmpeg`, and `aria2c` automatically during build. Media is piped directly from yt-dlp through FFmpeg to the client without server-side staging files.
 
 To stop:
 
@@ -137,7 +137,7 @@ docker compose down
 | `YTDLP_PATH` | `yt-dlp` | Path to the yt-dlp binary |
 | `INSPECT_TIMEOUT_MS` | `25000` | Timeout for media inspection |
 | `DOWNLOAD_MAX_CONCURRENCY` | `3` | Max simultaneous server-side downloads |
-| `DOWNLOAD_STAGING_DIR` | `./downloads` | Where completed/partial files are staged |
+| `FFMPEG_PATH` | `ffmpeg` | Path to the FFmpeg binary |
 
 ### Frontend (`frontend/.env`)
 

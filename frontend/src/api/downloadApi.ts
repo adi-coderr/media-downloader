@@ -22,8 +22,23 @@ export function getStreamUrl(sourceUrl: string, filename: string, streamType: 'v
 }
 
 export async function createDownload(input: CreateDownloadInput): Promise<DownloadJob> {
-  const response = await apiRequest<{ job: DownloadJob }>('/downloads', { method: 'POST', body: input });
-  return response.job;
+  const response = await fetch(`${API_BASE_URL}/downloads`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  if (!response.ok || !response.body) throw new Error('Unable to start the download.');
+  const id = response.headers.get('X-Download-Id');
+  if (!id) throw new Error('The server did not return a download id.');
+  const job: DownloadJob = {
+    id, sourceStreamUrl: input.sourceUrl, suggestedFilename: input.filename, status: 'downloading',
+    totalBytes: null, downloadedBytes: 0, speedBytesPerSec: 0, startedAt: Date.now(), updatedAt: Date.now(),
+  };
+  void response.blob().then((blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = input.filename; link.click();
+    URL.revokeObjectURL(url);
+  });
+  return job;
 }
 
 export async function getDownloadJob(id: string): Promise<DownloadJob> {
@@ -31,6 +46,3 @@ export async function getDownloadJob(id: string): Promise<DownloadJob> {
   return response.job;
 }
 
-export function getDownloadFileUrl(id: string): string {
-  return `${API_BASE_URL}/downloads/${id}/file`;
-}
