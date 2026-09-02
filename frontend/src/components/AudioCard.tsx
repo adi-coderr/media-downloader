@@ -46,10 +46,10 @@ export function AudioCard({ stream, index, onDownload, isQueued }: AudioCardProp
         type="button"
         onClick={() => onDownload(stream)}
         disabled={isQueued}
-        className="btn-primary mt-1 w-full bg-success/90 hover:bg-success hover:shadow-glow-success disabled:bg-white/10"
+        className="btn-primary mt-1 w-full bg-success/90 hover:bg-success hover:shadow-glow-success disabled:bg-white/10 disabled:animate-pulse"
       >
-        <DownloadCloud className="h-4 w-4" />
-        {isQueued ? 'Queued' : 'Download'}
+        <DownloadCloud className={`h-4 w-4 ${isQueued ? 'animate-spin' : ''}`} />
+        {isQueued ? 'Preparing...' : 'Download'}
       </button>
     </motion.div>
   );

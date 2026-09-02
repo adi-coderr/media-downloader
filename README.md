@@ -74,7 +74,7 @@ media-downloader-pro/
 - Node.js 18+
 - npm 9+
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation) available on your `PATH` (or set `YTDLP_PATH` to its binary location)
-- FFmpeg (optional, only needed if you extend the app to process user-owned media locally)
+- FFmpeg and `aria2c` available on your `PATH` for local downloads
 
 ### 1. Backend
 

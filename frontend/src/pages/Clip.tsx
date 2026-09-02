@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Pause, Play, Scissors, Video } from 'lucide-react';
-import { getStreamUrl } from '@/api/downloadApi';
+import { useDownloads } from '@/context/DownloadContext';
 import { useToast } from '@/context/ToastContext';
 import { useResultStore } from '@/hooks/useResultStore';
 import { MediaMetadata, VideoStream } from '@/types/media';
@@ -23,6 +23,7 @@ export function ClipPage(): JSX.Element {
   const location = useLocation();
   const { result } = useResultStore();
   const { showToast } = useToast();
+  const { enqueue } = useDownloads();
 
   const state = location.state as ClipPageState | undefined;
   const media = state?.media ?? result.media;
@@ -116,18 +117,17 @@ export function ClipPage(): JSX.Element {
     setIsSubmitting(true);
     try {
       const filename = buildFilename(media.title, stream.container, `${stream.resolution ?? 'clip'}-${safeStart}s-${safeEnd}s`);
-      window.location.href = getStreamUrl(
-        media.sourceUrl,
+      await enqueue({
+        sourceUrl: media.sourceUrl,
         filename,
-        'video',
-        'clip',
-        stream.formatId,
-        safeStart,
-        safeEnd,
+        streamType: 'video',
+        mode: 'clip',
+        formatId: stream.formatId,
+        startTime: safeStart,
+        endTime: safeEnd,
         outputResolution,
-      );
-      showToast('Clip queued', 'Your trimmed export will begin downloading shortly.', 'success');
-      navigate('/', { replace: true });
+      });
+      showToast('Clip queued', 'You can track its real progress above.', 'success');
     } catch {
       showToast('Could not start clip download', 'Please try again.', 'error');
     } finally {

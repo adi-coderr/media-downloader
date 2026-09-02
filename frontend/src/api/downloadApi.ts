@@ -1,35 +1,36 @@
-import { API_BASE_URL } from './client';
+import { API_BASE_URL, apiRequest } from './client';
+import { DownloadJob } from '@/types/media';
 
-export function getStreamUrl(
-  sourceUrl: string,
-  filename: string,
-  streamType: 'video' | 'audio' = 'video',
-  mode: 'download' | 'clip' = 'download',
-  formatId?: string,
-  startTime?: number,
-  endTime?: number,
-  outputResolution?: string,
-): string {
-  const params = new URLSearchParams({
-    sourceUrl,
-    filename,
-    streamType,
-    mode,
-  });
+export interface CreateDownloadInput {
+  sourceUrl: string;
+  filename: string;
+  streamType: 'video' | 'audio';
+  mode?: 'download' | 'clip';
+  formatId?: string;
+  startTime?: number;
+  endTime?: number;
+  outputResolution?: string;
+}
 
-  if (formatId) {
-    params.set('formatId', formatId);
-  }
-
-  if (startTime !== undefined) {
-    params.set('startTime', startTime.toString());
-  }
-  if (endTime !== undefined) {
-    params.set('endTime', endTime.toString());
-  }
-  if (outputResolution !== undefined) {
-    params.set('outputResolution', outputResolution);
-  }
-
+export function getStreamUrl(sourceUrl: string, filename: string, streamType: 'video' | 'audio' = 'video', mode: 'download' | 'clip' = 'download', formatId?: string, startTime?: number, endTime?: number, outputResolution?: string): string {
+  const params = new URLSearchParams({ sourceUrl, filename, streamType, mode });
+  if (formatId) params.set('formatId', formatId);
+  if (startTime !== undefined) params.set('startTime', startTime.toString());
+  if (endTime !== undefined) params.set('endTime', endTime.toString());
+  if (outputResolution !== undefined) params.set('outputResolution', outputResolution);
   return `${API_BASE_URL}/downloads/stream?${params.toString()}`;
+}
+
+export async function createDownload(input: CreateDownloadInput): Promise<DownloadJob> {
+  const response = await apiRequest<{ job: DownloadJob }>('/downloads', { method: 'POST', body: input });
+  return response.job;
+}
+
+export async function getDownloadJob(id: string): Promise<DownloadJob> {
+  const response = await apiRequest<{ job: DownloadJob }>(`/downloads/${id}`);
+  return response.job;
+}
+
+export function getDownloadFileUrl(id: string): string {
+  return `${API_BASE_URL}/downloads/${id}/file`;
 }

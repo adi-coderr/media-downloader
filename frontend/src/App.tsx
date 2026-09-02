@@ -11,6 +11,9 @@ import { ClipPage } from '@/pages/Clip';
 import { SettingsProvider, useSettings } from '@/context/SettingsContext';
 import { ToastProvider } from '@/context/ToastContext';
 import { ResultProvider } from '@/hooks/useResultStore';
+import { DownloadProvider } from '@/context/DownloadContext';
+import { DownloadSection } from '@/components/DownloadSection';
+import { DownloadsPage } from '@/pages/Downloads';
 
 function AnimatedRoutes(): JSX.Element {
   const location = useLocation();
@@ -29,6 +32,7 @@ function AnimatedRoutes(): JSX.Element {
           <Route path="/result" element={<ResultPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/clip" element={<ClipPage />} />
+          <Route path="/downloads" element={<DownloadsPage />} />
         </Routes>
       </motion.div>
     </AnimatePresence>
@@ -37,6 +41,7 @@ function AnimatedRoutes(): JSX.Element {
 
 function AppShell(): JSX.Element {
   const { settings } = useSettings();
+  const location = useLocation();
 
   useEffect(() => {
     const resolvedTheme = settings.theme === 'system'
@@ -52,6 +57,7 @@ function AppShell(): JSX.Element {
     <div className="relative min-h-screen">
       <AnimatedBackground />
       <Navbar />
+      {location.pathname !== '/downloads' && <DownloadSection />}
       <main className="pb-16">
         <AnimatedRoutes />
       </main>
@@ -64,7 +70,7 @@ export default function App(): JSX.Element {
     <SettingsProvider>
       <ToastProvider>
         <ResultProvider>
-          <AppShell />
+          <DownloadProvider><AppShell /></DownloadProvider>
         </ResultProvider>
       </ToastProvider>
     </SettingsProvider>

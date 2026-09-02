@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowLeft, AudioLines, Film } from 'lucide-react';
 import { useResultStore } from '@/hooks/useResultStore';
-import { getStreamUrl } from '@/api/downloadApi';
+import { useDownloads } from '@/context/DownloadContext';
 import { useToast } from '@/context/ToastContext';
 import { MediaSummaryCard } from '@/components/MediaSummaryCard';
 import { StreamCard } from '@/components/StreamCard';
@@ -25,6 +25,7 @@ export function ResultPage(): JSX.Element {
   const { result, setResult, clearResult } = useResultStore();
   const { media, availability, errorMessage } = result;
   const { showToast } = useToast();
+  const { enqueue } = useDownloads();
 
   useEffect(() => {
     if (availability !== null) {
@@ -43,23 +44,15 @@ export function ResultPage(): JSX.Element {
   const handleVideoDownload = async (stream: VideoStream): Promise<void> => {
     if (!media) return;
     const filename = buildFilename(media.title, stream.container, stream.resolution);
-    try {
-      window.location.href = getStreamUrl(media.sourceUrl, filename, 'video', 'download', stream.formatId);
-      showToast('Download started', 'Your download will begin shortly.', 'success');
-    } catch (error) {
-      showToast('Download failed', error instanceof Error ? error.message : 'Unable to start download.', 'error');
-    }
+    await enqueue({ sourceUrl: media.sourceUrl, filename, streamType: 'video', formatId: stream.formatId });
+    showToast('Download queued', 'You can track its real progress above.', 'success');
   };
 
   const handleAudioDownload = async (stream: AudioStream): Promise<void> => {
     if (!media) return;
     const filename = buildFilename(media.title, stream.container, stream.format);
-    try {
-      window.location.href = getStreamUrl(media.sourceUrl, filename, 'audio', 'download', stream.formatId);
-      showToast('Download started', 'Your download will begin shortly.', 'success');
-    } catch (error) {
-      showToast('Download failed', error instanceof Error ? error.message : 'Unable to start download.', 'error');
-    }
+    await enqueue({ sourceUrl: media.sourceUrl, filename, streamType: 'audio', formatId: stream.formatId });
+    showToast('Download queued', 'You can track its real progress above.', 'success');
   };
 
   if (availability === null) {

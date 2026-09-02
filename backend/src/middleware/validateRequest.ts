@@ -57,3 +57,14 @@ export function validateDownloadQuery(req: Request, _res: Response, next: NextFu
   req.query = parsed.data as any;
   next();
 }
+
+export function validateDownloadBody(req: Request, _res: Response, next: NextFunction): void {
+  const parsed = downloadQuerySchema.safeParse(req.body);
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0];
+    next(new AppError(firstIssue?.message ?? 'Invalid request.', 422));
+    return;
+  }
+  req.body = parsed.data;
+  next();
+}
