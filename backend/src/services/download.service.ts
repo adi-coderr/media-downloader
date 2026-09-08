@@ -556,3 +556,25 @@ export function getDownloadFilePath(id: string): { filePath: string; filename: s
   }
   return { filePath: job.filePath, filename: job.suggestedFilename };
 }
+
+// Background task to clean up old downloads after 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  const TEN_MINUTES_MS = 10 * 60 * 1000;
+  
+  for (const [id, job] of jobs.entries()) {
+    // Check if the job has been completed, cancelled, or errored for more than 10 minutes
+    if (['completed', 'cancelled', 'error'].includes(job.status)) {
+      if (now - job.updatedAt > TEN_MINUTES_MS) {
+        jobs.delete(id);
+        
+        // Remove the downloaded file if it exists
+        if (job.filePath && fs.existsSync(job.filePath)) {
+          fsPromises.unlink(job.filePath).catch((err) => {
+            logger.error('Failed to cleanup stale download file', { id, err: String(err) });
+          });
+        }
+      }
+    }
+  }
+}, 60 * 1000); // Run check every 1 minute
