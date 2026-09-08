@@ -15,8 +15,11 @@ services:
       - YTDLP_PATH=yt-dlp
       - INSPECT_TIMEOUT_MS=25000
       - DOWNLOAD_MAX_CONCURRENCY=3
+      - DOWNLOAD_STAGING_DIR=/app/downloads
       - RATE_LIMIT_WINDOW_MS=60000
       - RATE_LIMIT_MAX_REQUESTS=30
+    volumes:
+      - downloads-data:/app/downloads
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'node', '-e', "require('http').get('http://localhost:4000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
@@ -35,3 +38,5 @@ services:
       - backend
     restart: unless-stopped
 
+volumes:
+  downloads-data:

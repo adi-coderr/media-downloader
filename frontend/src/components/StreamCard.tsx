@@ -70,10 +70,10 @@ export function StreamCard({ stream, media, index, onDownload, isQueued }: Strea
           type="button"
           onClick={() => onDownload(stream)}
           disabled={isQueued}
-          className="btn-primary mt-1 flex-1 disabled:bg-white/10 disabled:animate-pulse"
+          className="btn-primary mt-1 flex-1 disabled:bg-white/10"
         >
-          <DownloadCloud className={`h-4 w-4 ${isQueued ? 'animate-spin' : ''}`} />
-          {isQueued ? 'Preparing...' : 'Download'}
+          <DownloadCloud className="h-4 w-4" />
+          {isQueued ? 'Queued' : 'Download'}
         </button>
         <button
           type="button"

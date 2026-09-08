@@ -36,30 +36,20 @@ export function validateAnalyzeRequest(req: Request, _res: Response, next: NextF
   next();
 }
 
-const downloadQuerySchema = z.object({
+const downloadBodySchema = z.object({
   sourceUrl: urlSchema,
+  streamUrl: urlSchema,
   filename: z.string().trim().min(1).max(255),
   streamType: z.enum(['video', 'audio']).optional().default('video'),
   formatId: z.string().trim().min(1).max(255).optional(),
   mode: z.enum(['download', 'clip']).optional().default('download'),
-  startTime: z.coerce.number().nonnegative().optional(),
-  endTime: z.coerce.number().nonnegative().optional(),
+  startTime: z.number().nonnegative().optional(),
+  endTime: z.number().nonnegative().optional(),
   outputResolution: z.string().trim().max(50).optional(),
 });
 
-export function validateDownloadQuery(req: Request, _res: Response, next: NextFunction): void {
-  const parsed = downloadQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    const firstIssue = parsed.error.issues[0];
-    next(new AppError(firstIssue?.message ?? 'Invalid request.', 422));
-    return;
-  }
-  req.query = parsed.data as any;
-  next();
-}
-
-export function validateDownloadBody(req: Request, _res: Response, next: NextFunction): void {
-  const parsed = downloadQuerySchema.safeParse(req.body);
+export function validateDownloadRequest(req: Request, _res: Response, next: NextFunction): void {
+  const parsed = downloadBodySchema.safeParse(req.body);
   if (!parsed.success) {
     const firstIssue = parsed.error.issues[0];
     next(new AppError(firstIssue?.message ?? 'Invalid request.', 422));

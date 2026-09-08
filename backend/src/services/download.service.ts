@@ -1,145 +1,558 @@
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
-import { Response } from 'express';
+import { ChildProcess, execFile } from 'child_process';
+import fs from 'fs';
+import fsPromises from 'fs/promises';
+import path from 'path';
 import { nanoid } from 'nanoid';
 import { env } from '../config/env';
-import { DownloadJob } from '../types/media.types';
 import { logger } from '../utils/logger';
+import { AppError } from '../utils/AppError';
+import { DownloadJob } from '../types/media.types';
 
-type Job = DownloadJob & { ytDlp?: ChildProcessWithoutNullStreams; ffmpeg?: ChildProcessWithoutNullStreams };
-const jobs = new Map<string, Job>();
+/**
+ * Manages server-staged downloads of direct media stream URLs that were
+ * already exposed as publicly downloadable by the source (via the
+ * inspection step). This service only ever fetches URLs the source itself
+ * served back to us — it performs no authentication bypass, no decryption,
+ * and no access-control circumvention.
+ */
+
+type DownloadKind = 'video' | 'audio';
+type DownloadMode = 'download' | 'clip';
+
+interface InternalJob extends DownloadJob {
+  abortController: AbortController;
+  process?: ChildProcess;
+  filePath: string;
+  paused: boolean;
+  sourceUrl: string;
+  streamUrl: string;
+  kind: DownloadKind;
+  formatId?: string;
+  mode: DownloadMode;
+  startTime?: number | null;
+  endTime?: number | null;
+  outputResolution?: string | null;
+}
+
+const jobs = new Map<string, InternalJob>();
+let activeDownloads = 0;
+const queue: string[] = [];
+
+function ensureStagingDir(): void {
+  if (!fs.existsSync(env.downloadStagingDir)) {
+    fs.mkdirSync(env.downloadStagingDir, { recursive: true });
+  }
+}
+
+function sanitizeFilename(filename: string): string {
+  return filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200) || 'download';
+}
+
+function toPublicJob(job: InternalJob): DownloadJob {
+  const { abortController: _abortController, filePath: _filePath, paused: _paused, ...publicJob } = job;
+  return publicJob;
+}
+
+async function processQueue(): Promise<void> {
+  if (activeDownloads >= env.downloadMaxConcurrency) {
+    return;
+  }
+  const nextId = queue.shift();
+  if (!nextId) {
+    return;
+  }
+  const job = jobs.get(nextId);
+  if (!job || job.status !== 'queued') {
+    void processQueue();
+    return;
+  }
+  activeDownloads += 1;
+  void runDownload(job).finally(() => {
+    activeDownloads -= 1;
+    void processQueue();
+  });
+}
+
+function parseSize(value: string): number | null {
+  const normalized = value.trim().replace(/,/g, '');
+  const match = normalized.match(/^([\d.]+)\s*(B|KiB|MiB|GiB|TiB|kB|MB|GB|TB)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers: Record<string, number> = {
+    b: 1,
+    kib: 1024,
+    mib: 1024 ** 2,
+    gib: 1024 ** 3,
+    tib: 1024 ** 4,
+    kb: 1000,
+    mb: 1000 ** 2,
+    gb: 1000 ** 3,
+    tb: 1000 ** 4,
+  };
+
+  return Number.isFinite(amount) ? amount * (multipliers[unit] ?? 1) : null;
+}
+
+function parseEta(value: string): number | null {
+  if (!value || value.toLowerCase() === 'unknown' || value.toLowerCase() === 'n/a') {
+    return null;
+  }
+
+  const parts = value.split(':').map((part) => Number(part));
+  if (parts.some((part) => Number.isNaN(part))) {
+    return null;
+  }
+
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  return parts[0];
+}
+
+function parseProgressLine(line: string): {
+  downloadedBytes?: number;
+  totalBytes?: number | null;
+  speedBytesPerSec?: number | null;
+  etaSeconds?: number | null;
+  progressPercent?: number | null;
+} | null {
+  const normalized = line.trim();
+  const explicitRegex = /downloaded_bytes:(?<downloadedBytes>-?\d+) total_bytes:(?<totalBytes>-?\d+) speed:(?<speed>[^\s]+) eta:(?<eta>[^\s]+) progress:(?<progress>[\d.]+)/;
+  const explicitMatch = normalized.match(explicitRegex);
+
+  if (explicitMatch?.groups) {
+    const downloadedBytes = Number(explicitMatch.groups.downloadedBytes);
+    const totalBytesRaw = Number(explicitMatch.groups.totalBytes);
+    const totalBytes = Number.isFinite(totalBytesRaw) && totalBytesRaw >= 0 ? totalBytesRaw : null;
+    const speedBytesPerSec = parseSize(explicitMatch.groups.speed.replace(/\/s$/, ''));
+    const etaSeconds = parseEta(explicitMatch.groups.eta);
+    const progressPercent = Number(explicitMatch.groups.progress);
+
+    return {
+      downloadedBytes: Number.isFinite(downloadedBytes) && downloadedBytes >= 0 ? downloadedBytes : undefined,
+      totalBytes,
+      speedBytesPerSec,
+      etaSeconds,
+      progressPercent: Number.isFinite(progressPercent) ? progressPercent : null,
+    };
+  }
+
+  const legacyRegex = /\[download\]\s+(?<percent>[\d.]+)% of\s+(?<size>[^\s]+)\s+at\s+(?<speed>[^\s]+)\s+ETA\s+(?<eta>[^\s]+)/i;
+  const legacyMatch = normalized.match(legacyRegex);
+  if (!legacyMatch?.groups) {
+    return null;
+  }
+
+  const progressPercent = Number(legacyMatch.groups.percent);
+  const totalBytes = parseSize(legacyMatch.groups.size);
+  const downloadedBytes = totalBytes !== null && Number.isFinite(progressPercent)
+    ? Math.round((progressPercent / 100) * totalBytes)
+    : undefined;
+  const speedBytesPerSec = parseSize(legacyMatch.groups.speed.replace(/\/s$/, ''));
+  const etaSeconds = parseEta(legacyMatch.groups.eta);
+
+  return {
+    downloadedBytes,
+    totalBytes,
+    speedBytesPerSec,
+    etaSeconds,
+    progressPercent: Number.isFinite(progressPercent) ? progressPercent : null,
+  };
+}
+
+async function runDownload(job: InternalJob): Promise<void> {
+  job.status = 'downloading';
+  job.updatedAt = Date.now();
+
+  // Create a unique per-job staging subdirectory so intermediate files
+  // (e.g. .f398.mp4, .f251.webm) don't clash with other jobs.
+  const jobTempDir = path.join(env.downloadStagingDir, `tmp_${job.id}`);
+  fs.mkdirSync(jobTempDir, { recursive: true });
+
+  try {
+    const outputExtension = job.kind === 'audio' ? 'm4a' : 'mp4';
+    const outputPath = job.filePath;
+
+    // IMPORTANT: Do NOT use job.formatId for the download format selector.
+    // The formatId from the inspect phase references a pre-signed CDN URL that
+    // expires within minutes. Passing it causes yt-dlp to try that stale URL
+    // directly, resulting in HTTP 403 Forbidden errors.
+    //
+    // Format selector strategy for video:
+    // 1. Prefer mp4/H.264 video + m4a audio → most compatible, avoids WebM 403s
+    // 2. Fall back to best video+audio of any format
+    // 3. Last resort: any single combined format
+    const formatSelector = job.kind === 'video'
+      ? 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
+      : 'bestaudio[ext=m4a]/bestaudio/best';
+
+    // Use a simple filename inside the per-job temp dir.
+    // yt-dlp will place its intermediate per-format files here as well.
+    const tempOutputTemplate = path.join(jobTempDir, `output.%(ext)s`);
+
+    const commonArgs = [
+      '--no-warnings',
+      '--no-playlist',
+      '--newline',
+      '--socket-timeout', '30',
+      '--retries', '3',
+      '--progress-template',
+      'downloaded_bytes:%(downloaded_bytes)s total_bytes:%(total_bytes)s speed:%(speed)s eta:%(eta)s progress:%(progress)s',
+      '--ffmpeg-location',
+      env.ffmpegPath,
+      '--output',
+      tempOutputTemplate,
+    ];
+
+    const formatArgs: string[] = job.kind === 'video'
+      ? ['--format', formatSelector, '--merge-output-format', 'mp4', '--recode-video', 'mp4']
+      : ['--format', formatSelector, '--extract-audio', '--audio-format', 'm4a', '--audio-quality', '0'];
+
+    const args = [...commonArgs, ...formatArgs, job.sourceUrl];
+
+    const MAX_RETRIES = 5;
+    let attempt = 0;
+    let success = false;
+    let lastError: Error | null = null;
+
+    while (attempt < MAX_RETRIES && !success) {
+      attempt++;
+      if (attempt > 1) {
+        logger.info(`Retrying download (attempt ${attempt}/${MAX_RETRIES}) due to failure...`, { jobId: job.id });
+        // small backoff
+        await new Promise((res) => setTimeout(res, 2000));
+      }
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const child = execFile(env.ytDlpPath, args, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
+            job.process = undefined;
+            if (job.abortController.signal.aborted) {
+              reject(new Error('Download cancelled'));
+              return;
+            }
+            if (error) {
+              reject(new Error(stderr.trim() || error.message));
+              return;
+            }
+            resolve();
+          });
+
+          job.process = child;
+
+          const processChunk = (data: string, bufferRef: { value: string }): void => {
+            bufferRef.value += data;
+            let newlineIndex: number;
+            while ((newlineIndex = bufferRef.value.indexOf('\n')) !== -1) {
+              const line = bufferRef.value.slice(0, newlineIndex).trim();
+              bufferRef.value = bufferRef.value.slice(newlineIndex + 1);
+              if (!line) {
+                continue;
+              }
+              const progress = parseProgressLine(line);
+              if (!progress) {
+                continue;
+              }
+
+              if (progress.downloadedBytes !== undefined) {
+                job.downloadedBytes = progress.downloadedBytes;
+              }
+              if (progress.totalBytes !== undefined) {
+                job.totalBytes = progress.totalBytes;
+              }
+              if (progress.speedBytesPerSec !== undefined && progress.speedBytesPerSec !== null) {
+                job.speedBytesPerSec = progress.speedBytesPerSec;
+              }
+              if (progress.progressPercent !== null) {
+                job.updatedAt = Date.now();
+              }
+            }
+          };
+
+          const stderrBuffer = { value: '' };
+          const stdoutBuffer = { value: '' };
+
+          child.stderr?.setEncoding('utf8');
+          child.stderr?.on('data', (chunk: string) => processChunk(chunk, stderrBuffer));
+          child.stdout?.setEncoding('utf8');
+          child.stdout?.on('data', (chunk: string) => processChunk(chunk, stdoutBuffer));
+
+          job.abortController.signal.addEventListener('abort', () => {
+            if (!child.killed) {
+              child.kill('SIGTERM');
+            }
+          }, { once: true });
+        });
+
+        success = true;
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = err.message || '';
+        // If it's a 403 or connection reset, yt-dlp can resume the `.part` file on the next attempt.
+        if (job.abortController.signal.aborted) {
+          throw err;
+        }
+        if (!errMsg.includes('403') && !errMsg.includes('Forbidden') && !errMsg.includes('reset by peer')) {
+          // If it's some other fatal error, don't retry
+          throw err;
+        }
+      }
+    }
+
+    if (!success) {
+      throw lastError || new Error('Download failed after retries');
+    }
+
+    // Scan the temp dir for the final merged output file.
+    // yt-dlp may write output.mp4, output.webm, output.m4a etc.
+    // Skip intermediate per-format files (output.f251.webm) and .part files.
+    const entries = fs.readdirSync(jobTempDir);
+    const finalFile = entries.find(
+      (f) => f.startsWith('output.') && !f.endsWith('.part') && !/\.f\d+\./.test(f),
+    );
+
+    if (!finalFile) {
+      logger.error('No output file found in temp dir', { jobTempDir, entries, jobId: job.id });
+      throw new AppError('The selected media could not be produced.', 500);
+    }
+
+    let resolvedTempPath = path.join(jobTempDir, finalFile);
+    logger.info('yt-dlp finished download', { resolvedTempPath, outputPath, jobId: job.id });
+
+    let finalPath = resolvedTempPath;
+
+    if (job.mode === 'clip' && job.kind === 'video') {
+      const clipStart = Math.max(0, job.startTime ?? 0);
+      const clipEnd = Math.max(clipStart + 0.1, job.endTime ?? clipStart + 0.1);
+      const clipDuration = Math.max(0.1, clipEnd - clipStart);
+      const resolutionFilter = job.outputResolution && job.outputResolution !== 'original'
+        ? `scale=-2:${String(job.outputResolution).replace(/p$/i, '')}`
+        : null;
+
+      const clipOutputPath = path.join(jobTempDir, `clip.${outputExtension}`);
+      const clipArgs = [
+        '-y',
+        '-ss',
+        String(clipStart),
+        '-i',
+        resolvedTempPath,
+        '-t',
+        String(clipDuration),
+        ...(resolutionFilter ? ['-vf', resolutionFilter] : []),
+        '-c:v',
+        'libx264',
+        '-preset',
+        'fast',
+        '-crf',
+        '23',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
+        '-movflags',
+        '+faststart',
+        clipOutputPath,
+      ];
+
+      await new Promise<void>((resolve, reject) => {
+        const child = execFile(env.ffmpegPath, clipArgs, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
+          job.process = undefined;
+          if (job.abortController.signal.aborted) {
+            reject(new Error('Download cancelled'));
+            return;
+          }
+          if (error) {
+            reject(new Error(stderr.trim() || error.message));
+            return;
+          }
+          resolve();
+        });
+
+        job.process = child;
+        job.abortController.signal.addEventListener('abort', () => {
+          if (!child.killed) {
+            child.kill('SIGTERM');
+          }
+        }, { once: true });
+      });
+      finalPath = clipOutputPath;
+      logger.info('ffmpeg clip completed', { clipStart, clipDuration, finalPath, jobId: job.id });
+    }
+
+    if (!fs.existsSync(finalPath)) {
+      logger.error('Final produced file missing', { finalPath, jobId: job.id });
+      throw new AppError('The selected media could not be produced.', 500);
+    }
+
+    // Move the produced file into the final job.filePath atomically
+    try {
+      fs.renameSync(finalPath, job.filePath);
+    } catch (err) {
+      logger.error('Rename failed, attempting copy fallback', { err: String(err), finalPath, target: job.filePath, jobId: job.id });
+      await fsPromises.copyFile(finalPath, job.filePath).catch((copyErr) => {
+        logger.error('Copy fallback failed', { err: String(copyErr), finalPath, target: job.filePath, jobId: job.id });
+      });
+    }
+
+    logger.info('Download job completed', { jobId: job.id, filePath: job.filePath });
+
+    job.status = 'completed';
+    job.speedBytesPerSec = 0;
+    job.updatedAt = Date.now();
+  } catch (error) {
+    if (job.abortController.signal.aborted) {
+      if (job.status === 'downloading') {
+        job.status = 'cancelled';
+      }
+    } else {
+      const message = error instanceof Error ? error.message : String(error);
+      job.status = 'error';
+      job.error = message;
+      logger.error('Download failed', { jobId: job.id, message });
+    }
+    job.updatedAt = Date.now();
+  } finally {
+    // Always clean up the per-job temp directory
+    fsPromises.rm(jobTempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+
 
 export function createDownloadJob(
-  res: Response,
   sourceUrl: string,
+  streamUrl: string,
   filename: string,
-  kind: 'video' | 'audio',
-  mode: 'download' | 'clip',
+  kind: DownloadKind = 'video',
   formatId?: string,
+  mode: DownloadMode = 'download',
   startTime?: number,
   endTime?: number,
   outputResolution?: string,
 ): DownloadJob {
-  const now = Date.now();
-  const job: Job = {
-    id: nanoid(12), sourceStreamUrl: sourceUrl, suggestedFilename: filename, status: 'queued',
-    totalBytes: null, downloadedBytes: 0, speedBytesPerSec: 0, startedAt: now, updatedAt: now,
-    mode, startTime, endTime, outputResolution,
+  ensureStagingDir();
+
+  const id = nanoid(12);
+  const providedExt = path.extname(filename);
+  const defaultExt = kind === 'audio' ? '.m4a' : '.mp4';
+  const ext = providedExt || defaultExt;
+  const baseName = sanitizeFilename(path.basename(filename, providedExt || ''));
+  const suggestedFilename = `${baseName}${ext}`;
+  const filePath = path.join(env.downloadStagingDir, `${id}-${baseName}${ext}`);
+
+  const job: InternalJob = {
+    id,
+    sourceStreamUrl: streamUrl,
+    suggestedFilename,
+    status: 'queued',
+    totalBytes: null,
+    downloadedBytes: 0,
+    speedBytesPerSec: 0,
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    abortController: new AbortController(),
+    filePath,
+    paused: false,
+    sourceUrl,
+    streamUrl,
+    kind,
+    formatId,
+    mode,
+    startTime,
+    endTime,
+    outputResolution,
   };
-  jobs.set(job.id, job);
-  res.setHeader('X-Download-Id', job.id);
-  void streamMedia(res, sourceUrl, filename, kind, mode, formatId, startTime, endTime, outputResolution, job);
-  return publicJob(job);
+
+  jobs.set(id, job);
+  queue.push(id);
+  void processQueue();
+
+  return toPublicJob(job);
 }
 
-export function getDownloadJob(id: string): DownloadJob | undefined {
+export function getDownloadJob(id: string): DownloadJob | null {
   const job = jobs.get(id);
-  return job ? publicJob(job) : undefined;
+  return job ? toPublicJob(job) : null;
 }
 
-function publicJob(job: Job): DownloadJob {
-  const { ytDlp: _ytDlp, ffmpeg: _ffmpeg, ...safeJob } = job;
-  return safeJob;
+export function listDownloadJobs(): DownloadJob[] {
+  return Array.from(jobs.values())
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .map(toPublicJob);
 }
 
-export async function streamMedia(
-  res: Response,
-  sourceUrl: string,
-  filename: string,
-  kind: 'video' | 'audio',
-  mode: 'download' | 'clip',
-  formatId?: string,
-  startTime?: number,
-  endTime?: number,
-  _outputResolution?: string,
-  job?: Job,
-): Promise<void> {
-  const extension = kind === 'audio' ? 'm4a' : 'mp4';
-  const safeName = filename.replace(/\.[^/.]+$/, '') + `.${extension}`;
-  const formatSelector = kind === 'audio'
-    ? formatId ?? 'bestaudio[ext=m4a]/bestaudio/best'
-    : formatId ? `${formatId}+bestaudio/${formatId}` : 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
-  const ytDlpArgs = [
-    '-f', formatSelector, '--no-warnings', '--newline',
-    '--progress-template', 'download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s',
-    '--concurrent-fragments', '8', '--ffmpeg-location', env.ffmpegPath,
-    '--extractor-args', 'youtube:player_client=web_embedded,mweb,tv',
-    '--downloader', 'aria2c', '--downloader-args', 'aria2c:-x 16 -s 16 -k 1M',
-    '-o', '-', sourceUrl,
-  ];
-  if (mode === 'clip' && startTime !== undefined) {
-    ytDlpArgs.splice(-2, 0, '--download-sections', `*${Math.max(0, startTime)}-${Math.max(startTime + 0.1, endTime ?? startTime + 0.1)}`);
+export function pauseDownloadJob(id: string): DownloadJob {
+  const job = jobs.get(id);
+  if (!job) {
+    throw new AppError('Download job not found.', 404);
   }
-
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeName)}"`);
-  res.setHeader('Content-Type', kind === 'audio' ? 'audio/mp4' : 'video/mp4');
-  res.setHeader('Transfer-Encoding', 'chunked');
-  res.flushHeaders();
-
-  const ytDlp = spawn(env.ytDlpPath, ytDlpArgs);
-  const ffmpeg = spawn(env.ffmpegPath, [
-    '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-map', '0', '-c', 'copy',
-    '-f', kind === 'audio' ? 'ipod' : 'mp4',
-    ...(kind === 'video' ? ['-movflags', 'frag_keyframe+empty_moov'] : []), 'pipe:1',
-  ]);
-  if (job) {
-    job.status = 'downloading'; job.updatedAt = Date.now(); job.ytDlp = ytDlp; job.ffmpeg = ffmpeg;
+  if (job.status !== 'downloading') {
+    throw new AppError('Only active downloads can be paused.', 409);
   }
+  job.paused = true;
+  job.status = 'paused';
+  job.speedBytesPerSec = 0;
+  job.updatedAt = Date.now();
+  job.abortController.abort();
+  if (job.process && !job.process.killed) {
+    job.process.kill('SIGTERM');
+  }
+  job.process = undefined;
+  return toPublicJob(job);
+}
 
-  let progressBuffer = '';
-  ytDlp.stderr.on('data', (data: Buffer) => {
-    const text = data.toString();
-    progressBuffer += text;
-    const lines = progressBuffer.split(/\r?\n/);
-    progressBuffer = lines.pop() ?? '';
-    for (const line of lines) {
-      const match = line.match(/^download:(\d+)\|([^|]+)\|([^|]+)$/);
-      if (!match || !job) continue;
-      const downloaded = Number(match[1]);
-      const total = Number(match[2]);
-      const speed = Number(match[3]);
-      if (Number.isFinite(downloaded)) job.downloadedBytes = downloaded;
-      if (Number.isFinite(total) && total > 0) job.totalBytes = total;
-      if (Number.isFinite(speed) && speed > 0) job.speedBytesPerSec = speed;
-      job.updatedAt = Date.now();
-    }
-    logger.debug('yt-dlp output', { jobId: job?.id, output: text.trim() });
-  });
-  ytDlp.stderr.on('error', (error) => logger.error('yt-dlp stderr error', { error: String(error), jobId: job?.id }));
-  ffmpeg.stderr.on('data', (data: Buffer) => logger.warn('ffmpeg stderr', { data: data.toString().trim(), jobId: job?.id }));
-  ytDlp.stdout.pipe(ffmpeg.stdin);
-  ffmpeg.stdout.pipe(res);
+export function resumeDownloadJob(id: string): DownloadJob {
+  const job = jobs.get(id);
+  if (!job) {
+    throw new AppError('Download job not found.', 404);
+  }
+  if (job.status !== 'paused') {
+    throw new AppError('Only paused downloads can be resumed.', 409);
+  }
+  job.paused = false;
+  job.status = 'queued';
+  job.abortController = new AbortController();
+  job.updatedAt = Date.now();
+  queue.push(id);
+  void processQueue();
+  return toPublicJob(job);
+}
 
-  let finished = false;
-  const terminate = (): void => {
-    if (!ytDlp.killed) ytDlp.kill('SIGKILL');
-    if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
-  };
-  const fail = (message: string): void => {
-    if (finished) return;
-    finished = true; terminate();
-    if (job) { job.status = 'error'; job.error = message; job.updatedAt = Date.now(); }
-    if (!res.writableEnded) res.destroy(new Error(message));
-  };
-  res.on('close', () => {
-    if (!finished) terminate();
-  });
-  ytDlp.on('error', () => fail('yt-dlp could not start or stopped unexpectedly.'));
-  ffmpeg.on('error', () => fail('FFmpeg could not start or stopped unexpectedly.'));
-  ytDlp.on('close', (code) => {
-    if (code !== 0 && !finished) fail(`yt-dlp exited with code ${code ?? 'unknown'}.`);
-  });
-  ffmpeg.on('close', (code) => {
-    if (finished) return;
-    finished = true;
-    if (code !== 0) {
-      if (job) { job.status = 'error'; job.error = `FFmpeg exited with code ${code ?? 'unknown'}.`; job.updatedAt = Date.now(); }
-      if (!res.writableEnded) res.destroy(new Error('FFmpeg failed while processing the media.'));
-      return;
-    }
-    if (job) {
-      job.status = 'completed'; job.updatedAt = Date.now();
-      if (job.totalBytes === null) job.totalBytes = job.downloadedBytes;
-    }
-    if (!res.writableEnded) res.end();
-  });
+export function cancelDownloadJob(id: string): DownloadJob {
+  const job = jobs.get(id);
+  if (!job) {
+    throw new AppError('Download job not found.', 404);
+  }
+  if (job.status === 'completed' || job.status === 'cancelled') {
+    return toPublicJob(job);
+  }
+  job.abortController.abort();
+  if (job.process && !job.process.killed) {
+    job.process.kill('SIGTERM');
+  }
+  job.process = undefined;
+  job.status = 'cancelled';
+  job.updatedAt = Date.now();
+
+  void fsPromises.unlink(job.filePath).catch(() => undefined);
+
+  return toPublicJob(job);
+}
+
+export function getDownloadFilePath(id: string): { filePath: string; filename: string } {
+  const job = jobs.get(id);
+  if (!job) {
+    throw new AppError('Download job not found.', 404);
+  }
+  if (job.status !== 'completed') {
+    throw new AppError('This download has not completed yet.', 409);
+  }
+  return { filePath: job.filePath, filename: job.suggestedFilename };
 }

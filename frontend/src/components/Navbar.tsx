@@ -1,17 +1,14 @@
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Download, Home, Settings as SettingsIcon } from 'lucide-react';
-import { useDownloads } from '@/context/DownloadContext';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: Home },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
   { to: '/downloads', label: 'Downloads', icon: Download },
+  { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
 export function Navbar(): JSX.Element {
-  const { jobs } = useDownloads();
-  const activeCount = jobs.filter((job) => job.status === 'queued' || job.status === 'downloading').length;
   return (
     <header className="sticky top-0 z-40 w-full px-4 pt-4 sm:px-6">
       <motion.nav
@@ -40,7 +37,6 @@ export function Navbar(): JSX.Element {
             >
               <Icon className="h-4 w-4" />
               <span className="hidden sm:inline">{label}</span>
-              {label === 'Downloads' && activeCount > 0 && <span className="rounded-full bg-white/20 px-1.5 text-[10px]">{activeCount}</span>}
             </NavLink>
           ))}
         </div>

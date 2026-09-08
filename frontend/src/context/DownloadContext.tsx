@@ -1,39 +1,36 @@
-import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
-import { createDownload, CreateDownloadInput, getDownloadJob } from '@/api/downloadApi';
+import { createContext, ReactNode, useContext } from 'react';
+import { useDownloadManager } from '@/hooks/useDownloadManager';
 import { DownloadJob } from '@/types/media';
 
 interface DownloadContextValue {
   jobs: DownloadJob[];
-  enqueue: (input: CreateDownloadInput) => Promise<DownloadJob>;
+  startNewDownload: (
+    sourceUrl: string,
+    streamUrl: string,
+    filename: string,
+    streamType?: 'video' | 'audio',
+    formatId?: string,
+    mode?: 'download' | 'clip',
+    startTime?: number,
+    endTime?: number,
+    outputResolution?: string,
+  ) => Promise<void>;
+  pause: (id: string) => Promise<void>;
+  resume: (id: string) => Promise<void>;
+  cancel: (id: string) => Promise<void>;
 }
 
-const DownloadContext = createContext<DownloadContextValue | null>(null);
+const DownloadContext = createContext<DownloadContextValue | undefined>(undefined);
 
 export function DownloadProvider({ children }: { children: ReactNode }): JSX.Element {
-  const [jobs, setJobs] = useState<DownloadJob[]>([]);
-
-  const enqueue = async (input: CreateDownloadInput): Promise<DownloadJob> => {
-    const job = await createDownload(input);
-    setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
-    return job;
-  };
-
-  useEffect(() => {
-    const active = jobs.filter((job) => job.status === 'queued' || job.status === 'downloading');
-    if (active.length === 0) return undefined;
-    const poll = window.setInterval(() => {
-      void Promise.all(active.map(async (job) => {
-        try { return await getDownloadJob(job.id); } catch { return job; }
-      })).then((updates) => setJobs((current) => current.map((job) => updates.find((update) => update.id === job.id) ?? job)));
-    }, 800);
-    return () => window.clearInterval(poll);
-  }, [jobs]);
-
-  return <DownloadContext.Provider value={{ jobs, enqueue }}>{children}</DownloadContext.Provider>;
+  const manager = useDownloadManager();
+  return <DownloadContext.Provider value={manager}>{children}</DownloadContext.Provider>;
 }
 
 export function useDownloads(): DownloadContextValue {
   const context = useContext(DownloadContext);
-  if (!context) throw new Error('useDownloads must be used inside DownloadProvider');
+  if (!context) {
+    throw new Error('useDownloads must be used within a DownloadProvider');
+  }
   return context;
 }

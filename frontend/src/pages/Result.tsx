@@ -24,8 +24,8 @@ export function ResultPage(): JSX.Element {
   const location = useLocation();
   const { result, setResult, clearResult } = useResultStore();
   const { media, availability, errorMessage } = result;
+  const { jobs, startNewDownload } = useDownloads();
   const { showToast } = useToast();
-  const { enqueue } = useDownloads();
 
   useEffect(() => {
     if (availability !== null) {
@@ -44,15 +44,25 @@ export function ResultPage(): JSX.Element {
   const handleVideoDownload = async (stream: VideoStream): Promise<void> => {
     if (!media) return;
     const filename = buildFilename(media.title, stream.container, stream.resolution);
-    await enqueue({ sourceUrl: media.sourceUrl, filename, streamType: 'video', formatId: stream.formatId });
-    showToast('Download queued', 'You can track its real progress above.', 'success');
+    try {
+      await startNewDownload(media.sourceUrl, stream.directUrl, filename, 'video', stream.formatId);
+      showToast('Download started', 'Check the Downloads page for live progress.', 'success');
+      navigate('/downloads');
+    } catch (error) {
+      showToast('Download failed', error instanceof Error ? error.message : 'Unable to start download.', 'error');
+    }
   };
 
   const handleAudioDownload = async (stream: AudioStream): Promise<void> => {
     if (!media) return;
     const filename = buildFilename(media.title, stream.container, stream.format);
-    await enqueue({ sourceUrl: media.sourceUrl, filename, streamType: 'audio', formatId: stream.formatId });
-    showToast('Download queued', 'You can track its real progress above.', 'success');
+    try {
+      await startNewDownload(media.sourceUrl, stream.directUrl, filename, 'audio', stream.formatId);
+      showToast('Download started', 'Check the Downloads page for live progress.', 'success');
+      navigate('/downloads');
+    } catch (error) {
+      showToast('Download failed', error instanceof Error ? error.message : 'Unable to start download.', 'error');
+    }
   };
 
   if (availability === null) {
@@ -105,7 +115,7 @@ export function ResultPage(): JSX.Element {
                     media={media}
                     index={index}
                     onDownload={handleVideoDownload}
-                    isQueued={false}
+                    isQueued={jobs.some((job) => job.sourceStreamUrl === stream.directUrl)}
                   />
                 ))}
               </div>
@@ -129,7 +139,7 @@ export function ResultPage(): JSX.Element {
                     stream={stream}
                     index={index}
                     onDownload={handleAudioDownload}
-                    isQueued={false}
+                    isQueued={jobs.some((job) => job.sourceStreamUrl === stream.directUrl)}
                   />
                 ))}
               </div>

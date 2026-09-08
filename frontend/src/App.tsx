@@ -6,14 +6,13 @@ import { Navbar } from '@/components/Navbar';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { HomePage } from '@/pages/Home';
 import { ResultPage } from '@/pages/Result';
+import { DownloadsPage } from '@/pages/Downloads';
 import { SettingsPage } from '@/pages/Settings';
 import { ClipPage } from '@/pages/Clip';
 import { SettingsProvider, useSettings } from '@/context/SettingsContext';
 import { ToastProvider } from '@/context/ToastContext';
-import { ResultProvider } from '@/hooks/useResultStore';
 import { DownloadProvider } from '@/context/DownloadContext';
-import { DownloadSection } from '@/components/DownloadSection';
-import { DownloadsPage } from '@/pages/Downloads';
+import { ResultProvider } from '@/hooks/useResultStore';
 
 function AnimatedRoutes(): JSX.Element {
   const location = useLocation();
@@ -30,9 +29,9 @@ function AnimatedRoutes(): JSX.Element {
         <Routes location={location}>
           <Route path="/" element={<HomePage />} />
           <Route path="/result" element={<ResultPage />} />
+          <Route path="/downloads" element={<DownloadsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/clip" element={<ClipPage />} />
-          <Route path="/downloads" element={<DownloadsPage />} />
         </Routes>
       </motion.div>
     </AnimatePresence>
@@ -41,7 +40,6 @@ function AnimatedRoutes(): JSX.Element {
 
 function AppShell(): JSX.Element {
   const { settings } = useSettings();
-  const location = useLocation();
 
   useEffect(() => {
     const resolvedTheme = settings.theme === 'system'
@@ -57,7 +55,6 @@ function AppShell(): JSX.Element {
     <div className="relative min-h-screen">
       <AnimatedBackground />
       <Navbar />
-      {location.pathname !== '/downloads' && <DownloadSection />}
       <main className="pb-16">
         <AnimatedRoutes />
       </main>
@@ -70,7 +67,9 @@ export default function App(): JSX.Element {
     <SettingsProvider>
       <ToastProvider>
         <ResultProvider>
-          <DownloadProvider><AppShell /></DownloadProvider>
+          <DownloadProvider>
+            <AppShell />
+          </DownloadProvider>
         </ResultProvider>
       </ToastProvider>
     </SettingsProvider>

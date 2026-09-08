@@ -22,8 +22,8 @@ export function ClipPage(): JSX.Element {
   const navigate = useNavigate();
   const location = useLocation();
   const { result } = useResultStore();
+  const { startNewDownload } = useDownloads();
   const { showToast } = useToast();
-  const { enqueue } = useDownloads();
 
   const state = location.state as ClipPageState | undefined;
   const media = state?.media ?? result.media;
@@ -117,17 +117,19 @@ export function ClipPage(): JSX.Element {
     setIsSubmitting(true);
     try {
       const filename = buildFilename(media.title, stream.container, `${stream.resolution ?? 'clip'}-${safeStart}s-${safeEnd}s`);
-      await enqueue({
-        sourceUrl: media.sourceUrl,
+      await startNewDownload(
+        media.sourceUrl,
+        stream.directUrl,
         filename,
-        streamType: 'video',
-        mode: 'clip',
-        formatId: stream.formatId,
-        startTime: safeStart,
-        endTime: safeEnd,
+        'video',
+        stream.formatId,
+        'clip',
+        safeStart,
+        safeEnd,
         outputResolution,
-      });
-      showToast('Clip queued', 'You can track its real progress above.', 'success');
+      );
+      showToast('Clip queued', 'Your trimmed export is being prepared.', 'success');
+      navigate('/downloads', { replace: true });
     } catch {
       showToast('Could not start clip download', 'Please try again.', 'error');
     } finally {

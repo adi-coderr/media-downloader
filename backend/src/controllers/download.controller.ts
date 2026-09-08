@@ -1,47 +1,80 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../utils/asyncHandler';
-import { createDownloadJob, getDownloadJob, streamMedia } from '../services/download.service';
+import { AppError } from '../utils/AppError';
+import {
+  cancelDownloadJob,
+  createDownloadJob,
+  getDownloadFilePath,
+  getDownloadJob,
+  listDownloadJobs,
+  pauseDownloadJob,
+  resumeDownloadJob,
+} from '../services/download.service';
 
-export const createDownload = asyncHandler(async (req: Request, res: Response) => {
-  const { sourceUrl, filename, streamType, mode, formatId, startTime, endTime, outputResolution } = req.body;
-  createDownloadJob(res, sourceUrl, filename, streamType ?? 'video', mode ?? 'download', formatId, startTime, endTime, outputResolution);
-});
-
-export const downloadStatus = asyncHandler(async (req: Request, res: Response) => {
-  const job = getDownloadJob(req.params.id);
-  if (!job) { res.status(404).json({ message: 'Download job not found.' }); return; }
-  res.json({ success: true, job });
-});
-
-export const streamDownload = asyncHandler(async (req: Request, res: Response) => {
-  const { sourceUrl, filename, streamType, mode, formatId, startTime, endTime, outputResolution } = req.query as {
+export const startDownload = asyncHandler(async (req: Request, res: Response) => {
+  const { sourceUrl, streamUrl, filename, streamType, formatId, mode, startTime, endTime, outputResolution } = req.body as {
     sourceUrl: string;
+    streamUrl: string;
     filename: string;
     streamType?: 'video' | 'audio';
-    mode?: 'download' | 'clip';
     formatId?: string;
-    startTime?: string;
-    endTime?: string;
+    mode?: 'download' | 'clip';
+    startTime?: number;
+    endTime?: number;
     outputResolution?: string;
   };
-
   try {
-    await streamMedia(
-      res,
+    const job = createDownloadJob(
       sourceUrl,
+      streamUrl,
       filename,
       streamType ?? 'video',
-      mode ?? 'download',
       formatId,
-      startTime ? Number(startTime) : undefined,
-      endTime ? Number(endTime) : undefined,
+      mode ?? 'download',
+      startTime,
+      endTime,
       outputResolution,
     );
+    res.status(201).json({ success: true, job });
   } catch (err) {
-    // If headers are not sent, we can still send a JSON error or text error
-    if (!res.headersSent) {
-      const message = err instanceof Error ? err.message : 'Unable to start download.';
-      res.status(500).send(`Download failed: ${message}`);
-    }
+    const message = err instanceof Error ? err.message : 'Unable to start download.';
+    // Log and return a helpful error to the client
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { logger } = require('../utils/logger');
+    logger.error('Failed to create download job', { message, payload: req.body });
+    throw new AppError(message, 400);
   }
+});
+
+export const getDownload = asyncHandler(async (req: Request, res: Response) => {
+  const job = getDownloadJob(req.params.id);
+  if (!job) {
+    throw new AppError('Download job not found.', 404);
+  }
+  res.status(200).json({ success: true, job });
+});
+
+export const getAllDownloads = asyncHandler(async (_req: Request, res: Response) => {
+  const jobs = listDownloadJobs();
+  res.status(200).json({ success: true, jobs });
+});
+
+export const pauseDownload = asyncHandler(async (req: Request, res: Response) => {
+  const job = pauseDownloadJob(req.params.id);
+  res.status(200).json({ success: true, job });
+});
+
+export const resumeDownload = asyncHandler(async (req: Request, res: Response) => {
+  const job = resumeDownloadJob(req.params.id);
+  res.status(200).json({ success: true, job });
+});
+
+export const cancelDownload = asyncHandler(async (req: Request, res: Response) => {
+  const job = cancelDownloadJob(req.params.id);
+  res.status(200).json({ success: true, job });
+});
+
+export const fetchDownloadFile = asyncHandler(async (req: Request, res: Response) => {
+  const { filePath, filename } = getDownloadFilePath(req.params.id);
+  res.download(filePath, filename);
 });

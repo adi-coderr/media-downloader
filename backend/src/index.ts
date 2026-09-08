@@ -12,15 +12,7 @@ import downloadRoutes from './routes/download.routes';
 
 const app: Express = express();
 
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
-  contentSecurityPolicy: {
-    directives: {
-      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-      'frame-ancestors': ["'self'", env.corsOrigin],
-    },
-  },
-}));
+app.use(helmet());
 app.use(
   cors({
     origin: env.corsOrigin,
