@@ -1,7 +1,8 @@
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CheckCircle2, Download, Pause, Play, X, XCircle, AlertCircle } from 'lucide-react';
 import { DownloadJob } from '@/types/media';
-import { formatBytes, formatEta, formatSpeed, truncateFilename } from '@/utils/format';
+import { formatBytes, formatDuration, formatEta, formatSpeed, truncateFilename } from '@/utils/format';
 import { getDownloadFileUrl } from '@/api/downloadApi';
 
 interface DownloadItemProps {
@@ -14,6 +15,7 @@ interface DownloadItemProps {
 const STATUS_STYLES: Record<DownloadJob['status'], { label: string; className: string }> = {
   queued: { label: 'Queued', className: 'text-white/50 bg-white/5' },
   downloading: { label: 'Downloading', className: 'text-primary bg-primary/15' },
+  processing: { label: 'Processing...', className: 'text-warning bg-warning/15' },
   paused: { label: 'Paused', className: 'text-warning bg-warning/15' },
   completed: { label: 'Completed', className: 'text-success bg-success/15' },
   cancelled: { label: 'Cancelled', className: 'text-white/40 bg-white/5' },
@@ -21,9 +23,39 @@ const STATUS_STYLES: Record<DownloadJob['status'], { label: string; className: s
 };
 
 export function DownloadItem({ job, onPause, onResume, onCancel }: DownloadItemProps): JSX.Element {
-  const progress = job.totalBytes ? Math.min(100, (job.downloadedBytes / job.totalBytes) * 100) : null;
+  const [now, setNow] = useState<number>(Date.now());
+
+  useEffect(() => {
+    if (job.status !== 'downloading' && job.status !== 'processing') {
+      return;
+    }
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [job.status]);
+
+  const progress = job.status === 'completed' || job.status === 'processing'
+    ? 100
+    : job.totalBytes
+    ? Math.min(100, (job.downloadedBytes / job.totalBytes) * 100)
+    : null;
+
   const status = STATUS_STYLES[job.status];
-  const isActive = job.status === 'downloading' || job.status === 'paused' || job.status === 'queued';
+  const isActive = job.status === 'downloading' || job.status === 'processing' || job.status === 'paused' || job.status === 'queued';
+
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor(((job.status === 'completed' ? job.updatedAt : now) - job.startedAt) / 1000),
+  );
+
+  const remainingDisplay = (() => {
+    if (job.status === 'completed') return '0s';
+    if (job.status === 'processing') return 'Muxing...';
+    if (job.status === 'paused') return 'Paused';
+    if (job.status === 'queued') return 'Queued';
+    return formatEta(job.downloadedBytes, job.totalBytes, job.speedBytesPerSec, job.etaSeconds);
+  })();
 
   return (
     <motion.div
@@ -97,10 +129,11 @@ export function DownloadItem({ job, onPause, onResume, onCancel }: DownloadItemP
             />
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
             <Stat label="Progress" value={progress !== null ? `${progress.toFixed(1)}%` : '—'} />
-            <Stat label="Speed" value={formatSpeed(job.speedBytesPerSec)} />
-            <Stat label="Remaining" value={formatEta(job.downloadedBytes, job.totalBytes, job.speedBytesPerSec)} />
+            <Stat label="Speed" value={job.status === 'downloading' ? formatSpeed(job.speedBytesPerSec) : '—'} />
+            <Stat label="Elapsed" value={formatDuration(elapsedSeconds)} />
+            <Stat label="Remaining" value={remainingDisplay} />
             <Stat
               label="Downloaded"
               value={`${formatBytes(job.downloadedBytes)}${job.totalBytes ? ` / ${formatBytes(job.totalBytes)}` : ''}`}

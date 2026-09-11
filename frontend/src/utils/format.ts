@@ -32,7 +32,30 @@ export function formatSpeed(bytesPerSec: number | null | undefined): string {
   return `${formatBytes(bytesPerSec)}/s`;
 }
 
-export function formatEta(downloadedBytes: number, totalBytes: number | null, speedBytesPerSec: number): string {
+export function formatEta(
+  downloadedBytes: number,
+  totalBytes: number | null,
+  speedBytesPerSec: number,
+  etaSeconds?: number | null,
+): string {
+  if (etaSeconds !== undefined && etaSeconds !== null && Number.isFinite(etaSeconds) && etaSeconds >= 0) {
+    if (etaSeconds === 0) {
+      return '0s';
+    }
+    const remainingSeconds = Math.ceil(etaSeconds);
+    if (remainingSeconds < 60) {
+      return `${remainingSeconds}s`;
+    }
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
+    if (minutes < 60) {
+      return `${minutes}m ${seconds}s`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes}m`;
+  }
+
   if (!totalBytes || speedBytesPerSec <= 0) {
     return '—';
   }

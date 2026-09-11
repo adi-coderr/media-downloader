@@ -116,14 +116,58 @@ function parseEta(value: string): number | null {
   return parts[0];
 }
 
-function parseProgressLine(line: string): {
+export function parseProgressLine(line: string): {
   downloadedBytes?: number;
   totalBytes?: number | null;
   speedBytesPerSec?: number | null;
   etaSeconds?: number | null;
   progressPercent?: number | null;
+  filename?: string;
+  status?: string;
 } | null {
   const normalized = line.trim();
+
+  // 1. Check for JSON progress output from --progress-template "download:%(progress)j"
+  if (normalized.startsWith('{') && normalized.endsWith('}')) {
+    try {
+      const data = JSON.parse(normalized);
+      if (data && typeof data === 'object') {
+        const total = (typeof data.total_bytes === 'number' && data.total_bytes > 0)
+          ? data.total_bytes
+          : (typeof data.total_bytes_estimate === 'number' && data.total_bytes_estimate > 0)
+          ? data.total_bytes_estimate
+          : null;
+
+        const downloadedBytes = typeof data.downloaded_bytes === 'number' && data.downloaded_bytes >= 0
+          ? data.downloaded_bytes
+          : undefined;
+
+        // Compute percent reliably: either from downloaded/total or parse _percent_str
+        let progressPercent: number | null = null;
+        if (typeof total === 'number' && total > 0 && typeof downloadedBytes === 'number') {
+          progressPercent = Math.min(100, Math.max(0, (downloadedBytes / total) * 100));
+        } else if (typeof data._percent_str === 'string') {
+          const parsed = parseFloat(data._percent_str.replace('%', '').trim());
+          if (Number.isFinite(parsed)) {
+            progressPercent = parsed;
+          }
+        }
+
+        return {
+          downloadedBytes,
+          totalBytes: total,
+          speedBytesPerSec: typeof data.speed === 'number' && data.speed >= 0 ? data.speed : null,
+          etaSeconds: typeof data.eta === 'number' && data.eta >= 0 ? data.eta : null,
+          progressPercent,
+          filename: typeof data.filename === 'string' ? data.filename : undefined,
+          status: typeof data.status === 'string' ? data.status : undefined,
+        };
+      }
+    } catch {
+      // Fall through to regex if JSON.parse fails
+    }
+  }
+
   const explicitRegex = /downloaded_bytes:(?<downloadedBytes>-?\d+) total_bytes:(?<totalBytes>-?\d+) speed:(?<speed>[^\s]+) eta:(?<eta>[^\s]+) progress:(?<progress>[\d.]+)/;
   const explicitMatch = normalized.match(explicitRegex);
 
@@ -204,7 +248,7 @@ async function runDownload(job: InternalJob): Promise<void> {
       '--socket-timeout', '30',
       '--retries', '3',
       '--progress-template',
-      'downloaded_bytes:%(downloaded_bytes)s total_bytes:%(total_bytes)s speed:%(speed)s eta:%(eta)s progress:%(progress)s',
+      'download:%(progress)j',
       '--ffmpeg-location',
       env.ffmpegPath,
       '--output',
@@ -247,32 +291,72 @@ async function runDownload(job: InternalJob): Promise<void> {
 
           job.process = child;
 
+          const streamMap = new Map<string, { downloaded: number; total: number | null }>();
+
           const processChunk = (data: string, bufferRef: { value: string }): void => {
             bufferRef.value += data;
-            let newlineIndex: number;
-            while ((newlineIndex = bufferRef.value.indexOf('\n')) !== -1) {
-              const line = bufferRef.value.slice(0, newlineIndex).trim();
-              bufferRef.value = bufferRef.value.slice(newlineIndex + 1);
+            let delimiterMatch: RegExpMatchArray | null;
+            while ((delimiterMatch = bufferRef.value.match(/[\r\n]+/))) {
+              const idx = delimiterMatch.index!;
+              const line = bufferRef.value.slice(0, idx).trim();
+              bufferRef.value = bufferRef.value.slice(idx + delimiterMatch[0].length);
               if (!line) {
                 continue;
               }
+
+              if (
+                line.includes('[Merger]') ||
+                line.includes('[ExtractAudio]') ||
+                line.includes('[Fixup') ||
+                line.includes('[VideoConvertor]')
+              ) {
+                job.status = 'processing';
+                job.speedBytesPerSec = 0;
+                job.etaSeconds = null;
+                job.updatedAt = Date.now();
+                continue;
+              }
+
               const progress = parseProgressLine(line);
               if (!progress) {
                 continue;
               }
 
+              const streamKey = progress.filename || 'default';
+              const currentStream = streamMap.get(streamKey) || { downloaded: 0, total: null };
+
               if (progress.downloadedBytes !== undefined) {
-                job.downloadedBytes = progress.downloadedBytes;
+                currentStream.downloaded = progress.downloadedBytes;
               }
-              if (progress.totalBytes !== undefined) {
-                job.totalBytes = progress.totalBytes;
+              if (progress.totalBytes !== undefined && progress.totalBytes !== null) {
+                currentStream.total = progress.totalBytes;
               }
+              if (progress.status === 'finished' && currentStream.total !== null) {
+                currentStream.downloaded = currentStream.total;
+              }
+              streamMap.set(streamKey, currentStream);
+
+              let aggregateDownloaded = 0;
+              let aggregateTotal: number | null = 0;
+              for (const s of streamMap.values()) {
+                aggregateDownloaded += s.downloaded;
+                if (s.total === null) {
+                  aggregateTotal = null;
+                } else if (aggregateTotal !== null) {
+                  aggregateTotal += s.total;
+                }
+              }
+
+              job.downloadedBytes = aggregateDownloaded;
+              job.totalBytes = aggregateTotal;
+
               if (progress.speedBytesPerSec !== undefined && progress.speedBytesPerSec !== null) {
                 job.speedBytesPerSec = progress.speedBytesPerSec;
               }
-              if (progress.progressPercent !== null) {
-                job.updatedAt = Date.now();
+              if (progress.etaSeconds !== undefined) {
+                job.etaSeconds = progress.etaSeconds;
               }
+              job.updatedAt = Date.now();
             }
           };
 
@@ -329,6 +413,11 @@ async function runDownload(job: InternalJob): Promise<void> {
     let finalPath = resolvedTempPath;
 
     if (job.mode === 'clip' && job.kind === 'video') {
+      job.status = 'processing';
+      job.speedBytesPerSec = 0;
+      job.etaSeconds = null;
+      job.updatedAt = Date.now();
+
       const clipStart = Math.max(0, job.startTime ?? 0);
       const clipEnd = Math.max(clipStart + 0.1, job.endTime ?? clipStart + 0.1);
       const clipDuration = Math.max(0.1, clipEnd - clipStart);
@@ -405,10 +494,11 @@ async function runDownload(job: InternalJob): Promise<void> {
 
     job.status = 'completed';
     job.speedBytesPerSec = 0;
+    job.etaSeconds = 0;
     job.updatedAt = Date.now();
   } catch (error) {
     if (job.abortController.signal.aborted) {
-      if (job.status === 'downloading') {
+      if (job.status === 'downloading' || job.status === 'processing') {
         job.status = 'cancelled';
       }
     } else {
@@ -455,6 +545,7 @@ export function createDownloadJob(
     totalBytes: null,
     downloadedBytes: 0,
     speedBytesPerSec: 0,
+    etaSeconds: null,
     startedAt: Date.now(),
     updatedAt: Date.now(),
     abortController: new AbortController(),
@@ -499,6 +590,7 @@ export function pauseDownloadJob(id: string): DownloadJob {
   job.paused = true;
   job.status = 'paused';
   job.speedBytesPerSec = 0;
+  job.etaSeconds = null;
   job.updatedAt = Date.now();
   job.abortController.abort();
   if (job.process && !job.process.killed) {
@@ -539,6 +631,8 @@ export function cancelDownloadJob(id: string): DownloadJob {
   }
   job.process = undefined;
   job.status = 'cancelled';
+  job.speedBytesPerSec = 0;
+  job.etaSeconds = null;
   job.updatedAt = Date.now();
 
   void fsPromises.unlink(job.filePath).catch(() => undefined);

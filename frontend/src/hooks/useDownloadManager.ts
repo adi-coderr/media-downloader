@@ -10,7 +10,8 @@ import {
 import { DownloadJob } from '@/types/media';
 import { useToast } from '@/context/ToastContext';
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_ACTIVE_MS = 1000;
+const POLL_INTERVAL_IDLE_MS = 2500;
 
 /** Persist notified job IDs in sessionStorage so toast deduplication
  *  survives React re-renders but resets when the tab is closed. */
@@ -78,13 +79,16 @@ export function useDownloadManager(): UseDownloadManagerResult {
     }
   }, [showToast]);
 
+  const hasActiveDownloads = jobs.some((j) => j.status === 'downloading' || j.status === 'processing' || j.status === 'queued');
+
   useEffect(() => {
     void refreshJobs();
+    const intervalTime = hasActiveDownloads ? POLL_INTERVAL_ACTIVE_MS : POLL_INTERVAL_IDLE_MS;
     const interval = window.setInterval(() => {
       void refreshJobs();
-    }, POLL_INTERVAL_MS);
+    }, intervalTime);
     return () => window.clearInterval(interval);
-  }, [refreshJobs]);
+  }, [refreshJobs, hasActiveDownloads]);
 
   const startNewDownload = useCallback(
     async (

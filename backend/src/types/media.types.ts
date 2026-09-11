@@ -49,7 +49,7 @@ export interface DownloadJob {
   id: string;
   sourceStreamUrl: string;
   suggestedFilename: string;
-  status: 'queued' | 'downloading' | 'paused' | 'completed' | 'cancelled' | 'error';
+  status: 'queued' | 'downloading' | 'processing' | 'paused' | 'completed' | 'cancelled' | 'error';
   totalBytes: number | null;
   downloadedBytes: number;
   speedBytesPerSec: number;
@@ -60,4 +60,5 @@ export interface DownloadJob {
   startTime?: number | null;
   endTime?: number | null;
   outputResolution?: string | null;
+  etaSeconds?: number | null;
 }

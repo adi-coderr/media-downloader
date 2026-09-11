@@ -49,6 +49,7 @@ export interface AnalyzeResponse {
 export type DownloadStatus =
   | 'queued'
   | 'downloading'
+  | 'processing'
   | 'paused'
   | 'completed'
   | 'cancelled'
@@ -66,4 +67,5 @@ export interface DownloadJob {
   updatedAt: number;
   error?: string;
   downloadUrl?: string;
+  etaSeconds?: number | null;
 }
