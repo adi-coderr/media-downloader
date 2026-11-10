@@ -14,7 +14,17 @@ export function isExecutableWorking(binPath: string): boolean {
     });
     return Boolean(output && output.trim().length > 0);
   } catch {
-    return false;
+    // Some CLI tools (like ffmpeg) only support -version with a single dash
+    try {
+      const fallbackOutput = execFileSync(binPath, ['-version'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 5000,
+      });
+      return Boolean(fallbackOutput && fallbackOutput.trim().length > 0);
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -57,9 +67,12 @@ export function getPlatformBinaryInfo(): { url: string; filename: string } {
 
 export async function ensureYtDlp(configuredPath?: string): Promise<string> {
   // 1. Explicitly configured path from environment
-  if (configuredPath && isExecutableWorking(configuredPath)) {
-    logger.info('Using configured yt-dlp path', { ytDlpPath: configuredPath });
-    return configuredPath;
+  if (configuredPath) {
+    if (isExecutableWorking(configuredPath)) {
+      logger.info('Using configured yt-dlp path', { ytDlpPath: configuredPath });
+      return configuredPath;
+    }
+    logger.warn('Configured yt-dlp path is not executable, falling back to auto-detection', { configuredPath });
   }
 
   // 2. System PATH check
@@ -87,24 +100,36 @@ export async function ensureYtDlp(configuredPath?: string): Promise<string> {
     targetPath: targetBinPath,
   });
 
+  let tempPath: string | null = null;
   try {
     fs.mkdirSync(binDir, { recursive: true });
-    const tempPath = `${targetBinPath}.tmp-${Date.now()}`;
+    tempPath = `${targetBinPath}.tmp-${Date.now()}`;
 
-    const res = await fetch(url, { redirect: 'follow' });
+    const res = await fetch(url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(60_000),
+    });
     if (!res.ok || !res.body) {
       throw new Error(`Failed to download yt-dlp (HTTP ${res.status} ${res.statusText})`);
     }
 
     const fileStream = fs.createWriteStream(tempPath, { mode: 0o755 });
-    // @ts-ignore
-    await pipeline(Readable.fromWeb(res.body as any), fileStream);
+    await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), fileStream);
 
     if (process.platform !== 'win32') {
       fs.chmodSync(tempPath, 0o755);
     }
 
+    if (fs.existsSync(targetBinPath)) {
+      try {
+        fs.unlinkSync(targetBinPath);
+      } catch {
+        // Ignored; renameSync will attempt to overwrite
+      }
+    }
+
     fs.renameSync(tempPath, targetBinPath);
+    tempPath = null;
 
     if (!isExecutableWorking(targetBinPath)) {
       throw new Error('Downloaded binary failed sanity check (--version)');
@@ -113,6 +138,13 @@ export async function ensureYtDlp(configuredPath?: string): Promise<string> {
     logger.info('yt-dlp downloaded and verified successfully', { ytDlpPath: targetBinPath });
     return targetBinPath;
   } catch (error) {
+    if (tempPath && fs.existsSync(tempPath)) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        // Ignore cleanup error
+      }
+    }
     logger.error('Failed to auto-download yt-dlp binary. Please install yt-dlp manually: https://github.com/yt-dlp/yt-dlp#installation', {
       error: error instanceof Error ? error.message : String(error),
     });
