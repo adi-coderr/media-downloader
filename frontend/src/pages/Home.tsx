@@ -8,20 +8,35 @@ import { ResultSkeleton } from '@/components/ResultSkeleton';
 export function HomePage(): JSX.Element {
   const navigate = useNavigate();
   const { analyze, isLoading, media, availability, errorMessage } = useMediaAnalyze();
-  const { setResult } = useResultStore();
+  const { result, setResult, setUrl } = useResultStore();
 
   useEffect(() => {
     if (availability === null) {
       return;
     }
 
-    setResult({ media, availability, errorMessage });
+    setResult((prev) => ({
+      ...prev,
+      media,
+      availability,
+      errorMessage,
+    }));
     navigate('/result', { state: { media, availability, errorMessage } });
   }, [availability, media, errorMessage, navigate, setResult]);
 
+  const handleAnalyze = (url: string) => {
+    setUrl(url);
+    void analyze(url);
+  };
+
   return (
     <div>
-      <Hero onAnalyze={analyze} isLoading={isLoading} />
+      <Hero
+        onAnalyze={handleAnalyze}
+        isLoading={isLoading}
+        initialUrl={result.url}
+        onUrlChange={setUrl}
+      />
 
       {isLoading && <ResultSkeleton />}
 

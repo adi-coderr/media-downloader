@@ -6,9 +6,11 @@ import { ExampleUrls } from './ExampleUrls';
 interface HeroProps {
   onAnalyze: (url: string) => void;
   isLoading: boolean;
+  initialUrl?: string;
+  onUrlChange?: (url: string) => void;
 }
 
-export function Hero({ onAnalyze, isLoading }: HeroProps): JSX.Element {
+export function Hero({ onAnalyze, isLoading, initialUrl, onUrlChange }: HeroProps): JSX.Element {
   return (
     <section className="relative flex flex-col items-center px-4 pb-16 pt-20 text-center sm:pt-28">
       <motion.div
@@ -45,7 +47,12 @@ export function Hero({ onAnalyze, isLoading }: HeroProps): JSX.Element {
         transition={{ duration: 0.6, delay: 0.3 }}
         className="mt-10 w-full max-w-2xl"
       >
-        <UrlInput onSubmit={onAnalyze} isLoading={isLoading} />
+        <UrlInput
+          onSubmit={onAnalyze}
+          isLoading={isLoading}
+          initialValue={initialUrl}
+          onValueChange={onUrlChange}
+        />
       </motion.div>
 
       <motion.div

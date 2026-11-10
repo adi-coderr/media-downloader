@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Clipboard, Link2, Search } from 'lucide-react';
 import { isLikelyValidUrl, normalizeUrl } from '@/utils/format';
@@ -6,11 +6,19 @@ import { isLikelyValidUrl, normalizeUrl } from '@/utils/format';
 interface UrlInputProps {
   onSubmit: (url: string) => void;
   isLoading: boolean;
+  initialValue?: string;
+  onValueChange?: (value: string) => void;
 }
 
-export function UrlInput({ onSubmit, isLoading }: UrlInputProps): JSX.Element {
-  const [value, setValue] = useState('');
+export function UrlInput({ onSubmit, isLoading, initialValue, onValueChange }: UrlInputProps): JSX.Element {
+  const [value, setValue] = useState(initialValue ?? '');
   const [touched, setTouched] = useState(false);
+
+  useEffect(() => {
+    if (initialValue !== undefined) {
+      setValue(initialValue);
+    }
+  }, [initialValue]);
 
   const isValid = value.trim().length === 0 || isLikelyValidUrl(value);
 
@@ -27,8 +35,10 @@ export function UrlInput({ onSubmit, isLoading }: UrlInputProps): JSX.Element {
     try {
       const clipboardText = await navigator.clipboard.readText();
       if (clipboardText) {
-        setValue(clipboardText.trim());
+        const text = clipboardText.trim();
+        setValue(text);
         setTouched(true);
+        onValueChange?.(text);
       }
     } catch {
       // Clipboard access may be denied by the browser; user can paste manually.
@@ -48,8 +58,10 @@ export function UrlInput({ onSubmit, isLoading }: UrlInputProps): JSX.Element {
             type="text"
             value={value}
             onChange={(event) => {
-              setValue(event.target.value);
+              const next = event.target.value;
+              setValue(next);
               if (!touched) setTouched(true);
+              onValueChange?.(next);
             }}
             placeholder="Paste a public, non-DRM video URL…"
             className="w-full bg-transparent py-3 text-base text-black placeholder-black/30 outline-none"

@@ -1,29 +1,90 @@
 import { createContext, ReactNode, useContext, useState } from 'react';
 import { MediaAvailability, MediaMetadata } from '@/types/media';
 
-interface ResultState {
+export interface ResultState {
+  url: string;
   media: MediaMetadata | null;
   availability: MediaAvailability | null;
   errorMessage: string | null;
 }
 
-interface ResultStoreValue {
+export interface ResultStoreValue {
   result: ResultState;
-  setResult: (result: ResultState) => void;
+  setResult: (result: ResultState | Partial<ResultState> | ((prev: ResultState) => ResultState)) => void;
+  setUrl: (url: string) => void;
   clearResult: () => void;
 }
 
-const INITIAL_STATE: ResultState = { media: null, availability: null, errorMessage: null };
+const STORAGE_KEY = 'mdp_active_media_result';
+
+const INITIAL_STATE: ResultState = {
+  url: '',
+  media: null,
+  availability: null,
+  errorMessage: null,
+};
+
+function loadStoredResult(): ResultState {
+  if (typeof window === 'undefined') return INITIAL_STATE;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          url: typeof parsed.url === 'string' ? parsed.url : '',
+          media: parsed.media ?? null,
+          availability: parsed.availability ?? null,
+          errorMessage: parsed.errorMessage ?? null,
+        };
+      }
+    }
+  } catch {
+    // Ignore JSON errors
+  }
+  return INITIAL_STATE;
+}
 
 const ResultContext = createContext<ResultStoreValue | undefined>(undefined);
 
 export function ResultProvider({ children }: { children: ReactNode }): JSX.Element {
-  const [result, setResult] = useState<ResultState>(INITIAL_STATE);
+  const [result, setResultState] = useState<ResultState>(loadStoredResult);
 
-  const clearResult = (): void => setResult(INITIAL_STATE);
+  const setResult = (next: ResultState | Partial<ResultState> | ((prev: ResultState) => ResultState)): void => {
+    setResultState((prev) => {
+      const value = typeof next === 'function' ? next(prev) : next;
+      const updated: ResultState = {
+        url: value.url !== undefined ? value.url : prev.url,
+        media: value.media !== undefined ? value.media : prev.media,
+        availability: value.availability !== undefined ? value.availability : prev.availability,
+        errorMessage: value.errorMessage !== undefined ? value.errorMessage : prev.errorMessage,
+      };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      } catch {
+        // Storage quota or private mode error
+      }
+      return updated;
+    });
+  };
+
+  const setUrl = (url: string): void => {
+    setResult((prev) => ({ ...prev, url }));
+  };
+
+  const clearResult = (): void => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Ignore
+    }
+    setResultState(INITIAL_STATE);
+  };
 
   return (
-    <ResultContext.Provider value={{ result, setResult, clearResult }}>{children}</ResultContext.Provider>
+    <ResultContext.Provider value={{ result, setResult, setUrl, clearResult }}>
+      {children}
+    </ResultContext.Provider>
   );
 }
 
