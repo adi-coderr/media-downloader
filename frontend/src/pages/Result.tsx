@@ -1,10 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, AudioLines, Film } from 'lucide-react';
+import { ArrowLeft, AudioLines, Film, Filter } from 'lucide-react';
 import { useResultStore } from '@/hooks/useResultStore';
 import { useDownloads } from '@/context/DownloadContext';
 import { useToast } from '@/context/ToastContext';
+import { useSettings } from '@/context/SettingsContext';
 import { MediaSummaryCard } from '@/components/MediaSummaryCard';
 import { StreamCard } from '@/components/StreamCard';
 import { AudioCard } from '@/components/AudioCard';
@@ -26,6 +27,37 @@ export function ResultPage(): JSX.Element {
   const { media, availability, errorMessage } = result;
   const { jobs, startNewDownload } = useDownloads();
   const { showToast } = useToast();
+  const { settings } = useSettings();
+
+  const [activeFormat, setActiveFormat] = useState<string>(settings.preferredFormat);
+
+  useEffect(() => {
+    setActiveFormat(settings.preferredFormat);
+  }, [settings.preferredFormat]);
+
+  const availableContainers = useMemo(() => {
+    if (!media) return [];
+    const counts = new Map<string, number>();
+    for (const stream of media.videoStreams) {
+      const ext = (stream.container ?? 'other').toLowerCase();
+      counts.set(ext, (counts.get(ext) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).map(([ext, count]) => ({
+      ext,
+      label: ext.toUpperCase(),
+      count,
+    }));
+  }, [media]);
+
+  const filteredVideoStreams = useMemo(() => {
+    if (!media) return [];
+    if (activeFormat === 'original') {
+      return media.videoStreams;
+    }
+    return media.videoStreams.filter(
+      (stream) => (stream.container ?? '').toLowerCase() === activeFormat.toLowerCase(),
+    );
+  }, [media, activeFormat]);
 
   useEffect(() => {
     if (availability !== null) {
@@ -92,12 +124,48 @@ export function ResultPage(): JSX.Element {
           <MediaSummaryCard media={media} />
 
           <div className="mt-10">
-            <div className="mb-4 flex items-center gap-2">
-              <Film className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-bold text-white">Video streams</h2>
-              <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-xs text-white/40">
-                {media.videoStreams.length}
-              </span>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Film className="h-5 w-5 text-primary" />
+                <h2 className="text-lg font-bold text-white">Video streams</h2>
+                <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-xs text-white/40">
+                  {filteredVideoStreams.length} of {media.videoStreams.length}
+                </span>
+              </div>
+
+              {availableContainers.length > 0 && (
+                <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-white/5 p-1 text-xs">
+                  <div className="flex items-center gap-1 px-2 text-white/40">
+                    <Filter className="h-3 w-3" />
+                    <span>Format:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveFormat('original')}
+                    className={`rounded-xl px-2.5 py-1 font-medium transition ${
+                      activeFormat === 'original'
+                        ? 'bg-primary text-slate-950 font-semibold shadow-sm'
+                        : 'text-white/60 hover:text-white'
+                    }`}
+                  >
+                    All ({media.videoStreams.length})
+                  </button>
+                  {availableContainers.map(({ ext, label, count }) => (
+                    <button
+                      key={ext}
+                      type="button"
+                      onClick={() => setActiveFormat(ext)}
+                      className={`rounded-xl px-2.5 py-1 font-medium transition ${
+                        activeFormat.toLowerCase() === ext
+                          ? 'bg-primary text-slate-950 font-semibold shadow-sm'
+                          : 'text-white/60 hover:text-white'
+                      }`}
+                    >
+                      {label} ({count})
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {media.videoStreams.length === 0 ? (
@@ -106,18 +174,41 @@ export function ResultPage(): JSX.Element {
                 title="No video streams available"
                 description="This source did not expose any downloadable video formats."
               />
+            ) : filteredVideoStreams.length === 0 ? (
+              <div className="glass-panel flex flex-col items-center justify-center p-8 text-center">
+                <Film className="mb-3 h-10 w-10 text-white/20" />
+                <h3 className="text-base font-semibold text-white">
+                  No {activeFormat.toUpperCase()} streams available for this video
+                </h3>
+                <p className="mt-1 max-w-md text-sm text-white/50">
+                  This source provided {availableContainers.map((c) => `${c.count} ${c.label}`).join(', ')} streams.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActiveFormat('original')}
+                  className="btn-primary mt-4 px-4 py-2 text-xs"
+                >
+                  Show all available streams ({media.videoStreams.length})
+                </button>
+              </div>
             ) : (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {media.videoStreams.map((stream, index) => (
-                  <StreamCard
-                    key={stream.formatId}
-                    stream={stream}
-                    media={media}
-                    index={index}
-                    onDownload={handleVideoDownload}
-                    isQueued={jobs.some((job) => job.sourceStreamUrl === stream.directUrl)}
-                  />
-                ))}
+                {filteredVideoStreams.map((stream, index) => {
+                  const isPreferred =
+                    (stream.container ?? '').toLowerCase() === settings.preferredFormat.toLowerCase() ||
+                    stream.resolution === settings.preferredQuality;
+                  return (
+                    <StreamCard
+                      key={stream.formatId}
+                      stream={stream}
+                      media={media}
+                      index={index}
+                      onDownload={handleVideoDownload}
+                      isQueued={jobs.some((job) => job.sourceStreamUrl === stream.directUrl)}
+                      isPreferred={isPreferred}
+                    />
+                  );
+                })}
               </div>
             )}
           </div>

@@ -10,9 +10,10 @@ interface StreamCardProps {
   index: number;
   onDownload: (stream: VideoStream) => void;
   isQueued: boolean;
+  isPreferred?: boolean;
 }
 
-export function StreamCard({ stream, media, index, onDownload, isQueued }: StreamCardProps): JSX.Element {
+export function StreamCard({ stream, media, index, onDownload, isQueued, isPreferred }: StreamCardProps): JSX.Element {
   const navigate = useNavigate();
 
   const handleClip = (): void => {
@@ -38,10 +39,17 @@ export function StreamCard({ stream, media, index, onDownload, isQueued }: Strea
           </div>
         </div>
         {/* Downloads always merge best audio — always show audio badge */}
-        <span title="Downloaded with audio (auto-merged)" className="flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
-          <Volume2 className="h-3 w-3" />
-          Audio
-        </span>
+        <div className="flex items-center gap-1.5">
+          {isPreferred && (
+            <span className="flex items-center gap-1 rounded-full bg-primary/20 px-2 py-0.5 text-xs font-semibold text-primary">
+              Preferred
+            </span>
+          )}
+          <span title="Downloaded with audio (auto-merged)" className="flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
+            <Volume2 className="h-3 w-3" />
+            Audio
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-sm">
