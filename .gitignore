@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Production builds
+dist/
+
+# Environment files
+.env
+.env.local
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Staged downloads
+downloads/
+backend/downloads/
+
+# Local auto-downloaded binaries
+backend/bin/
+yt-dlp-latest
+yt-dlp-nightly
+
+# Local backup directories
+.git_backup/
+
+# Build caches
+*.tsbuildinfo
+

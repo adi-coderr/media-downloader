@@ -5,7 +5,7 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import { env } from './config/env';
 import { logger } from './utils/logger';
-import { execFileSync } from 'child_process';
+import { ensureYtDlp, isExecutableWorking } from './utils/ytDlpResolver';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import mediaRoutes from './routes/media.routes';
 import downloadRoutes from './routes/download.routes';
@@ -45,20 +45,28 @@ app.use('/api/downloads', downloadRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(env.port, () => {
-  logger.info(`Media Downloader API listening on port ${env.port} [${env.nodeEnv}]`);
-  // Verify required CLI tools are available and log helpful instructions
+async function bootstrap(): Promise<void> {
   try {
-    const ytDlpPath = execFileSync('which', [env.ytDlpPath]).toString().trim() || env.ytDlpPath;
-    logger.info('yt-dlp availability check', { ytDlpPath });
+    env.ytDlpPath = await ensureYtDlp(process.env.YTDLP_PATH);
+    logger.info('yt-dlp initialized successfully', { ytDlpPath: env.ytDlpPath });
   } catch (err) {
-    logger.warn('yt-dlp not found in PATH. Ensure yt-dlp is installed and reachable.', { ytDlpPath: env.ytDlpPath });
+    logger.error('Failed to initialize yt-dlp', { error: err });
   }
 
-  try {
-    const ffmpegPath = execFileSync('which', [env.ffmpegPath]).toString().trim() || env.ffmpegPath;
-    logger.info('ffmpeg availability check', { ffmpegPath });
-  } catch (err) {
-    logger.warn('ffmpeg not found in PATH. Ensure ffmpeg is installed and reachable.', { ffmpegPath: env.ffmpegPath });
+  if (isExecutableWorking(env.ffmpegPath)) {
+    logger.info('ffmpeg availability check: ready', { ffmpegPath: env.ffmpegPath });
+  } else {
+    logger.warn('ffmpeg not found or not working. Some merging features may be degraded.', {
+      ffmpegPath: env.ffmpegPath,
+    });
   }
+
+  app.listen(env.port, () => {
+    logger.info(`Media Downloader API listening on port ${env.port} [${env.nodeEnv}]`);
+  });
+}
+
+bootstrap().catch((err) => {
+  logger.error('Fatal error during startup', { error: err });
+  process.exit(1);
 });

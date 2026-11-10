@@ -1,0 +1,16 @@
+{
+  "name": "media-downloader",
+  "version": "1.0.0",
+  "description": "Media Downloader - Cross-platform media inspector and downloader",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "npm --prefix backend install && npm --prefix frontend install",
+    "dev": "node scripts/dev.mjs",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck"
+  }
+}
+

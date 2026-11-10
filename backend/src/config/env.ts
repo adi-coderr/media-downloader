@@ -21,7 +21,7 @@ export const env = {
   corsOrigin: requireString('CORS_ORIGIN', 'http://localhost:5173'),
   rateLimitWindowMs: requireNumber('RATE_LIMIT_WINDOW_MS', 60_000),
   rateLimitMaxRequests: requireNumber('RATE_LIMIT_MAX_REQUESTS', 30),
-  ytDlpPath: requireString('YTDLP_PATH', path.resolve(__dirname, '../../../yt-dlp-latest')),
+  ytDlpPath: requireString('YTDLP_PATH', 'yt-dlp'),
   ffmpegPath: requireString('FFMPEG_PATH', ffmpegPath || 'ffmpeg'),
   inspectTimeoutMs: requireNumber('INSPECT_TIMEOUT_MS', 25_000),
   downloadMaxConcurrency: requireNumber('DOWNLOAD_MAX_CONCURRENCY', 3),

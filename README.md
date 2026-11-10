@@ -67,38 +67,55 @@ media-downloader-pro/
 
 ---
 
-## 🚀 Getting Started (Local Development)
+## 🚀 Getting Started (Cross-Platform)
+
+Media Downloader works out-of-the-box on **macOS**, **Windows**, and **Linux**.
 
 ### Prerequisites
 
-- Node.js 18+
-- npm 9+
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation) available on your `PATH` (or set `YTDLP_PATH` to its binary location)
-- FFmpeg (optional, only needed if you extend the app to process user-owned media locally)
+- **Node.js 18+** & **npm 9+** (or Docker)
+- *Note:* You do **not** need to manually install `yt-dlp` or `ffmpeg`. The backend automatically detects or downloads the appropriate `yt-dlp` binary for your operating system and architecture on startup, and `ffmpeg` is bundled cross-platform via `ffmpeg-static`.
 
-### 1. Backend
+---
 
+### Quick Start (Single Command)
+
+From the project root:
+
+```bash
+# 1. Install all dependencies for both backend and frontend
+npm run setup
+
+# 2. Run both backend and frontend concurrently
+npm run dev
+```
+
+* **Frontend:** `http://localhost:5173`
+* **Backend API:** `http://localhost:4000/api/health`
+
+#### Quick Launch Scripts
+- **macOS / Linux:** Run `./start.sh`
+- **Windows:** Double-click `start.bat`
+
+---
+
+### Alternative: Running Individually
+
+If you prefer running services in separate terminal windows:
+
+#### 1. Backend
 ```bash
 cd backend
-cp .env.example .env
 npm install
 npm run dev
 ```
 
-The API starts on `http://localhost:4000`. Health check: `GET /api/health`.
-
-### 2. Frontend
-
+#### 2. Frontend
 ```bash
 cd frontend
-cp .env.example .env
 npm install
 npm run dev
 ```
-
-The app starts on `http://localhost:5173` and proxies `/api` to the backend automatically (see `vite.config.ts`).
-
-Open `http://localhost:5173` in your browser.
 
 ---
 
