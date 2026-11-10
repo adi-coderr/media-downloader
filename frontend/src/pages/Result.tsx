@@ -195,8 +195,8 @@ export function ResultPage(): JSX.Element {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {filteredVideoStreams.map((stream, index) => {
                   const isPreferred =
-                    (stream.container ?? '').toLowerCase() === settings.preferredFormat.toLowerCase() ||
-                    stream.resolution === settings.preferredQuality;
+                    stream.resolution === settings.preferredQuality ||
+                    (settings.preferredQuality === 'best' && index === 0);
                   return (
                     <StreamCard
                       key={stream.formatId}
