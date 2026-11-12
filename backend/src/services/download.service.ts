@@ -247,6 +247,7 @@ async function runDownload(job: InternalJob): Promise<void> {
       '--newline',
       '--socket-timeout', '30',
       '--retries', '3',
+      '--continue',
       '--progress-template',
       'download:%(progress)j',
       '--ffmpeg-location',
@@ -267,19 +268,26 @@ async function runDownload(job: InternalJob): Promise<void> {
     let lastError: Error | null = null;
 
     while (attempt < MAX_RETRIES && !success) {
+      if (job.abortController.signal.aborted || job.paused) {
+        break;
+      }
+
       attempt++;
       if (attempt > 1) {
         logger.info(`Retrying download (attempt ${attempt}/${MAX_RETRIES}) due to failure...`, { jobId: job.id });
         // small backoff
         await new Promise((res) => setTimeout(res, 2000));
+        if (job.abortController.signal.aborted || job.paused) {
+          break;
+        }
       }
 
       try {
         await new Promise<void>((resolve, reject) => {
           const child = execFile(env.ytDlpPath, args, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
             job.process = undefined;
-            if (job.abortController.signal.aborted) {
-              reject(new Error('Download cancelled'));
+            if (job.abortController.signal.aborted || job.paused) {
+              reject(new Error(job.paused ? 'Download paused' : 'Download cancelled'));
               return;
             }
             if (error) {
@@ -292,6 +300,33 @@ async function runDownload(job: InternalJob): Promise<void> {
           job.process = child;
 
           const streamMap = new Map<string, { downloaded: number; total: number | null }>();
+
+          // Pre-populate streamMap with any intermediate stream files that already finished downloading
+          if (fs.existsSync(jobTempDir)) {
+            try {
+              const existingFiles = fs.readdirSync(jobTempDir);
+              for (const file of existingFiles) {
+                if (!file.endsWith('.part') && !file.endsWith('.ytdl')) {
+                  const fullPath = path.join(jobTempDir, file);
+                  const stat = fs.statSync(fullPath);
+                  if (stat.isFile() && stat.size > 0) {
+                    streamMap.set(file, { downloaded: stat.size, total: stat.size });
+                  }
+                }
+              }
+              if (streamMap.size > 0) {
+                let initDownloaded = 0;
+                for (const s of streamMap.values()) {
+                  initDownloaded += s.downloaded;
+                }
+                if (initDownloaded > job.downloadedBytes) {
+                  job.downloadedBytes = initDownloaded;
+                }
+              }
+            } catch {
+              // Ignore stat error
+            }
+          }
 
           const processChunk = (data: string, bufferRef: { value: string }): void => {
             bufferRef.value += data;
@@ -314,6 +349,31 @@ async function runDownload(job: InternalJob): Promise<void> {
                 job.speedBytesPerSec = 0;
                 job.etaSeconds = null;
                 job.updatedAt = Date.now();
+                continue;
+              }
+
+              const alreadyDownloadedMatch = line.match(/\[download\]\s+(.+?)\s+has already been downloaded/i);
+              if (alreadyDownloadedMatch) {
+                const filePathOrName = alreadyDownloadedMatch[1];
+                const filename = path.basename(filePathOrName);
+                const streamKey = filename || 'default';
+                try {
+                  const fullPath = path.isAbsolute(filePathOrName) ? filePathOrName : path.join(jobTempDir, filename);
+                  if (fs.existsSync(fullPath)) {
+                    const stat = fs.statSync(fullPath);
+                    streamMap.set(streamKey, { downloaded: stat.size, total: stat.size });
+                    let aggregateDownloaded = 0;
+                    for (const s of streamMap.values()) {
+                      aggregateDownloaded += s.downloaded;
+                    }
+                    if (aggregateDownloaded > job.downloadedBytes) {
+                      job.downloadedBytes = aggregateDownloaded;
+                    }
+                    job.updatedAt = Date.now();
+                  }
+                } catch {
+                  // Ignore error
+                }
                 continue;
               }
 
@@ -380,7 +440,7 @@ async function runDownload(job: InternalJob): Promise<void> {
         lastError = err;
         const errMsg = err.message || '';
         // If it's a 403 or connection reset, yt-dlp can resume the `.part` file on the next attempt.
-        if (job.abortController.signal.aborted) {
+        if (job.abortController.signal.aborted || job.paused) {
           throw err;
         }
         if (!errMsg.includes('403') && !errMsg.includes('Forbidden') && !errMsg.includes('reset by peer')) {
@@ -453,8 +513,8 @@ async function runDownload(job: InternalJob): Promise<void> {
       await new Promise<void>((resolve, reject) => {
         const child = execFile(env.ffmpegPath, clipArgs, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
           job.process = undefined;
-          if (job.abortController.signal.aborted) {
-            reject(new Error('Download cancelled'));
+          if (job.abortController.signal.aborted || job.paused) {
+            reject(new Error(job.paused ? 'Download paused' : 'Download cancelled'));
             return;
           }
           if (error) {
@@ -497,10 +557,14 @@ async function runDownload(job: InternalJob): Promise<void> {
     job.etaSeconds = 0;
     job.updatedAt = Date.now();
   } catch (error) {
-    if (job.abortController.signal.aborted) {
-      if (job.status === 'downloading' || job.status === 'processing') {
-        job.status = 'cancelled';
-      }
+    if (job.paused || (job.status as string) === 'paused') {
+      job.status = 'paused';
+      job.speedBytesPerSec = 0;
+      job.etaSeconds = null;
+    } else if (job.abortController.signal.aborted) {
+      job.status = 'cancelled';
+      job.speedBytesPerSec = 0;
+      job.etaSeconds = null;
     } else {
       const message = error instanceof Error ? error.message : String(error);
       job.status = 'error';
@@ -509,8 +573,10 @@ async function runDownload(job: InternalJob): Promise<void> {
     }
     job.updatedAt = Date.now();
   } finally {
-    // Always clean up the per-job temp directory
-    fsPromises.rm(jobTempDir, { recursive: true, force: true }).catch(() => undefined);
+    // Clean up the per-job temp directory unless the job is paused
+    if (!job.paused && (job.status as string) !== 'paused') {
+      fsPromises.rm(jobTempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
@@ -584,14 +650,20 @@ export function pauseDownloadJob(id: string): DownloadJob {
   if (!job) {
     throw new AppError('Download job not found.', 404);
   }
-  if (job.status !== 'downloading') {
-    throw new AppError('Only active downloads can be paused.', 409);
+  if (job.status !== 'downloading' && job.status !== 'queued') {
+    throw new AppError('Only active or queued downloads can be paused.', 409);
   }
   job.paused = true;
   job.status = 'paused';
   job.speedBytesPerSec = 0;
   job.etaSeconds = null;
   job.updatedAt = Date.now();
+
+  const queueIdx = queue.indexOf(id);
+  if (queueIdx !== -1) {
+    queue.splice(queueIdx, 1);
+  }
+
   job.abortController.abort();
   if (job.process && !job.process.killed) {
     job.process.kill('SIGTERM');
@@ -612,7 +684,9 @@ export function resumeDownloadJob(id: string): DownloadJob {
   job.status = 'queued';
   job.abortController = new AbortController();
   job.updatedAt = Date.now();
-  queue.push(id);
+  if (!queue.includes(id)) {
+    queue.push(id);
+  }
   void processQueue();
   return toPublicJob(job);
 }
@@ -625,6 +699,13 @@ export function cancelDownloadJob(id: string): DownloadJob {
   if (job.status === 'completed' || job.status === 'cancelled') {
     return toPublicJob(job);
   }
+  job.paused = false;
+
+  const queueIdx = queue.indexOf(id);
+  if (queueIdx !== -1) {
+    queue.splice(queueIdx, 1);
+  }
+
   job.abortController.abort();
   if (job.process && !job.process.killed) {
     job.process.kill('SIGTERM');
@@ -636,6 +717,9 @@ export function cancelDownloadJob(id: string): DownloadJob {
   job.updatedAt = Date.now();
 
   void fsPromises.unlink(job.filePath).catch(() => undefined);
+
+  const jobTempDir = path.join(env.downloadStagingDir, `tmp_${job.id}`);
+  void fsPromises.rm(jobTempDir, { recursive: true, force: true }).catch(() => undefined);
 
   return toPublicJob(job);
 }
@@ -651,23 +735,32 @@ export function getDownloadFilePath(id: string): { filePath: string; filename: s
   return { filePath: job.filePath, filename: job.suggestedFilename };
 }
 
-// Background task to clean up old downloads after 10 minutes
+// Background task to clean up old downloads after 10 minutes (and abandoned paused jobs after 1 hour)
 setInterval(() => {
   const now = Date.now();
   const TEN_MINUTES_MS = 10 * 60 * 1000;
+  const ONE_HOUR_MS = 60 * 60 * 1000;
   
   for (const [id, job] of jobs.entries()) {
-    // Check if the job has been completed, cancelled, or errored for more than 10 minutes
-    if (['completed', 'cancelled', 'error'].includes(job.status)) {
-      if (now - job.updatedAt > TEN_MINUTES_MS) {
-        jobs.delete(id);
-        
-        // Remove the downloaded file if it exists
-        if (job.filePath && fs.existsSync(job.filePath)) {
-          fsPromises.unlink(job.filePath).catch((err) => {
-            logger.error('Failed to cleanup stale download file', { id, err: String(err) });
-          });
-        }
+    const isFinished = ['completed', 'cancelled', 'error'].includes(job.status);
+    const isAbandonedPaused = job.status === 'paused' && (now - job.updatedAt > ONE_HOUR_MS);
+
+    if ((isFinished && now - job.updatedAt > TEN_MINUTES_MS) || isAbandonedPaused) {
+      jobs.delete(id);
+      
+      // Remove the downloaded file if it exists
+      if (job.filePath && fs.existsSync(job.filePath)) {
+        fsPromises.unlink(job.filePath).catch((err) => {
+          logger.error('Failed to cleanup stale download file', { id, err: String(err) });
+        });
+      }
+
+      // Remove the per-job temp directory if it exists
+      const jobTempDir = path.join(env.downloadStagingDir, `tmp_${id}`);
+      if (fs.existsSync(jobTempDir)) {
+        fsPromises.rm(jobTempDir, { recursive: true, force: true }).catch((err) => {
+          logger.error('Failed to cleanup stale temp directory', { id, err: String(err) });
+        });
       }
     }
   }
