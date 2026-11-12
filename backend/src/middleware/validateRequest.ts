@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import { AppError } from '../utils/AppError';
+import { assertSafeMediaUrl } from '../utils/ssrfGuard';
 
 const urlSchema = z
   .string()
@@ -25,15 +26,21 @@ const analyzeBodySchema = z.object({
   url: urlSchema,
 });
 
-export function validateAnalyzeRequest(req: Request, _res: Response, next: NextFunction): void {
+export async function validateAnalyzeRequest(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const parsed = analyzeBodySchema.safeParse(req.body);
   if (!parsed.success) {
     const firstIssue = parsed.error.issues[0];
     next(new AppError(firstIssue?.message ?? 'Invalid request.', 422));
     return;
   }
-  req.body = parsed.data;
-  next();
+
+  try {
+    const safeUrl = await assertSafeMediaUrl(parsed.data.url);
+    req.body = { ...parsed.data, url: safeUrl };
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 const downloadBodySchema = z.object({
@@ -45,16 +52,23 @@ const downloadBodySchema = z.object({
   mode: z.enum(['download', 'clip']).optional().default('download'),
   startTime: z.number().nonnegative().optional(),
   endTime: z.number().nonnegative().optional(),
-  outputResolution: z.string().trim().max(50).optional(),
+  outputResolution: z.string().trim().regex(/^(original|\d{2,4}p?)$/i, 'Invalid output resolution format.').optional(),
 });
 
-export function validateDownloadRequest(req: Request, _res: Response, next: NextFunction): void {
+export async function validateDownloadRequest(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const parsed = downloadBodySchema.safeParse(req.body);
   if (!parsed.success) {
     const firstIssue = parsed.error.issues[0];
     next(new AppError(firstIssue?.message ?? 'Invalid request.', 422));
     return;
   }
-  req.body = parsed.data;
-  next();
+
+  try {
+    const safeSourceUrl = await assertSafeMediaUrl(parsed.data.sourceUrl);
+    const safeStreamUrl = await assertSafeMediaUrl(parsed.data.streamUrl);
+    req.body = { ...parsed.data, sourceUrl: safeSourceUrl, streamUrl: safeStreamUrl };
+    next();
+  } catch (err) {
+    next(err);
+  }
 }

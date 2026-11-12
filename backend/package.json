@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "test": "tsx src/tests/sessionIsolation.test.ts"
+    "test": "tsx src/tests/sessionIsolation.test.ts && tsx src/tests/security.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

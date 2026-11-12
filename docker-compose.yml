@@ -6,8 +6,6 @@ services:
       context: ./backend
       target: production
     container_name: mdp-backend
-    ports:
-      - '4000:4000'
     environment:
       - PORT=4000
       - NODE_ENV=production

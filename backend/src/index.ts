@@ -12,6 +12,9 @@ import downloadRoutes from './routes/download.routes';
 
 const app: Express = express();
 
+// Trust the first reverse proxy (e.g. Nginx, Cloudflare, AWS ALB) for client IP detection
+app.set('trust proxy', 1);
+
 app.use(helmet());
 app.use(
   cors({
@@ -27,14 +30,25 @@ app.use(
   }),
 );
 
-const apiLimiter = rateLimit({
+// General rate limiter for lightweight status polling
+const generalLimiter = rateLimit({
   windowMs: env.rateLimitWindowMs,
-  max: env.rateLimitMaxRequests,
+  max: Math.max(env.rateLimitMaxRequests * 5, 150),
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests. Please slow down and try again shortly.' },
 });
-app.use('/api', apiLimiter);
+app.use('/api', generalLimiter);
+
+// Stricter rate limiter for resource-intensive media analysis
+const analyzeLimiter = rateLimit({
+  windowMs: env.rateLimitWindowMs,
+  max: env.rateLimitMaxRequests,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many analysis requests. Please slow down and try again shortly.' },
+});
+app.use('/api/media', analyzeLimiter);
 
 app.get('/api/health', (_req, res) => {
   res.status(200).json({ success: true, status: 'ok', timestamp: new Date().toISOString() });

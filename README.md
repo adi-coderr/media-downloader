@@ -128,7 +128,7 @@ docker compose up --build
 ```
 
 - Frontend: `http://localhost:8080`
-- Backend API (direct): `http://localhost:4000/api/health`
+- Backend API (via Nginx proxy): `http://localhost:8080/api/health`
 
 The backend image installs `yt-dlp` and `ffmpeg` automatically during build. Downloaded files are staged in a named Docker volume (`downloads-data`) so partial/completed downloads survive container restarts.
 

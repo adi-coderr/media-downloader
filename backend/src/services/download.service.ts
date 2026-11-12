@@ -261,7 +261,7 @@ async function runDownload(job: InternalJob): Promise<void> {
       ? ['--format', formatSelector, '--merge-output-format', 'mp4', '--recode-video', 'mp4']
       : ['--format', formatSelector, '--extract-audio', '--audio-format', 'm4a', '--audio-quality', '0'];
 
-    const args = [...commonArgs, ...formatArgs, job.sourceUrl];
+    const args = [...commonArgs, ...formatArgs, '--', job.sourceUrl];
 
     const MAX_RETRIES = 5;
     let attempt = 0;
@@ -285,7 +285,16 @@ async function runDownload(job: InternalJob): Promise<void> {
 
       try {
         await new Promise<void>((resolve, reject) => {
-          const child = execFile(env.ytDlpPath, args, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
+          let child: ChildProcess;
+          const onAbort = (): void => {
+            if (child && !child.killed) {
+              child.kill('SIGTERM');
+            }
+          };
+          job.abortController.signal.addEventListener('abort', onAbort, { once: true });
+
+          child = execFile(env.ytDlpPath, args, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
+            job.abortController.signal.removeEventListener('abort', onAbort);
             job.process = undefined;
             if (job.abortController.signal.aborted || job.paused) {
               reject(new Error(job.paused ? 'Download paused' : 'Download cancelled'));
@@ -428,12 +437,6 @@ async function runDownload(job: InternalJob): Promise<void> {
           child.stderr?.on('data', (chunk: string) => processChunk(chunk, stderrBuffer));
           child.stdout?.setEncoding('utf8');
           child.stdout?.on('data', (chunk: string) => processChunk(chunk, stdoutBuffer));
-
-          job.abortController.signal.addEventListener('abort', () => {
-            if (!child.killed) {
-              child.kill('SIGTERM');
-            }
-          }, { once: true });
         });
 
         success = true;
@@ -512,7 +515,16 @@ async function runDownload(job: InternalJob): Promise<void> {
       ];
 
       await new Promise<void>((resolve, reject) => {
-        const child = execFile(env.ffmpegPath, clipArgs, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
+        let child: ChildProcess;
+        const onAbort = (): void => {
+          if (child && !child.killed) {
+            child.kill('SIGTERM');
+          }
+        };
+        job.abortController.signal.addEventListener('abort', onAbort, { once: true });
+
+        child = execFile(env.ffmpegPath, clipArgs, { maxBuffer: 1024 * 1024 * 64 }, (error, _stdout, stderr) => {
+          job.abortController.signal.removeEventListener('abort', onAbort);
           job.process = undefined;
           if (job.abortController.signal.aborted || job.paused) {
             reject(new Error(job.paused ? 'Download paused' : 'Download cancelled'));
@@ -526,11 +538,6 @@ async function runDownload(job: InternalJob): Promise<void> {
         });
 
         job.process = child;
-        job.abortController.signal.addEventListener('abort', () => {
-          if (!child.killed) {
-            child.kill('SIGTERM');
-          }
-        }, { once: true });
       });
       finalPath = clipOutputPath;
       logger.info('ffmpeg clip completed', { clipStart, clipDuration, finalPath, jobId: job.id });
@@ -580,8 +587,6 @@ async function runDownload(job: InternalJob): Promise<void> {
     }
   }
 }
-
-
 
 export function createDownloadJob(
   sourceUrl: string,
@@ -739,7 +744,18 @@ export function getDownloadFilePath(id: string, sessionId?: string): { filePath:
   if (job.status !== 'completed') {
     throw new AppError('This download has not completed yet.', 409);
   }
-  return { filePath: job.filePath, filename: job.suggestedFilename };
+
+  // Path traversal guard: verify resolved path remains strictly within downloadStagingDir
+  const resolvedPath = path.resolve(job.filePath);
+  const resolvedStagingDir = path.resolve(env.downloadStagingDir);
+  if (!resolvedPath.startsWith(resolvedStagingDir + path.sep)) {
+    throw new AppError('Access to requested file path is forbidden.', 403);
+  }
+  if (!fs.existsSync(resolvedPath)) {
+    throw new AppError('Requested file no longer exists.', 404);
+  }
+
+  return { filePath: resolvedPath, filename: job.suggestedFilename };
 }
 
 // Background task to clean up old downloads after 10 minutes (and abandoned paused jobs after 1 hour)
@@ -772,9 +788,5 @@ const cleanupInterval = setInterval(() => {
     }
   }
 }, 60 * 1000); // Run check every 1 minute
-
-cleanupInterval.unref();
-
-
 
 cleanupInterval.unref();

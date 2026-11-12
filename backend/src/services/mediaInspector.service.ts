@@ -201,6 +201,7 @@ export async function inspectMedia(sourceUrl: string): Promise<InspectResult> {
         '--no-warnings',
         '--no-playlist',
         '--socket-timeout', '15',
+        '--',
         sourceUrl,
       ],
       env.inspectTimeoutMs,
