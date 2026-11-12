@@ -11,7 +11,7 @@ A premium, dark-glassmorphism web app for inspecting and downloading **publicly 
 - **Analyze any public media URL** — resolution, FPS, codecs, container, duration, thumbnail, and estimated size.
 - **Every exposed stream, listed as a card** — separate sections for video streams and audio-only streams, each with a one-click download.
 - **Real download manager** — live progress, speed, ETA, downloaded bytes, plus pause / resume / cancel and a completion toast.
-- **Settings** — theme, default download location, preferred quality/format, notifications, language (persisted locally).
+- **Settings** — theme, preferred quality/format, notifications (persisted locally).
 - **Honest error states** — friendly messages for invalid URLs, protected/DRM content, and "nothing downloadable" cases.
 - **Premium UI** — dark glassmorphism, animated gradients, hover glow, loading skeletons, fully responsive.
 

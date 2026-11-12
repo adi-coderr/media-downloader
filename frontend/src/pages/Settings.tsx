@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
-import { Bell, FolderDown, Gauge, RotateCcw, Video } from 'lucide-react';
+import { Bell, Gauge, RotateCcw, Video } from 'lucide-react';
 import { useSettings } from '@/context/SettingsContext';
-import { SettingsRow, SelectField, ToggleField, TextField } from '@/components/SettingsControls';
+import { SettingsRow, SelectField, ToggleField } from '@/components/SettingsControls';
 import { useToast } from '@/context/ToastContext';
 
 export function SettingsPage(): JSX.Element {
@@ -30,18 +30,6 @@ export function SettingsPage(): JSX.Element {
       </div>
 
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-panel px-6">
-        <SettingsRow
-          icon={FolderDown}
-          label="Default download location"
-          description="Where completed downloads are saved on this device."
-        >
-          <TextField
-            value={settings.defaultDownloadLocation}
-            onChange={(value) => updateSettings({ defaultDownloadLocation: value })}
-            placeholder="~/Downloads/MediaDownloaderPro"
-          />
-        </SettingsRow>
-
         <SettingsRow
           icon={Gauge}
           label="Preferred quality"
