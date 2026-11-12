@@ -1,4 +1,4 @@
-import { apiRequest, API_BASE_URL } from './client';
+import { apiRequest, API_BASE_URL, getOrCreateSessionId } from './client';
 import { DownloadJob } from '@/types/media';
 
 interface JobResponse {
@@ -55,5 +55,5 @@ export async function cancelDownload(id: string): Promise<DownloadJob> {
 }
 
 export function getDownloadFileUrl(id: string): string {
-  return `${API_BASE_URL}/downloads/${id}/file`;
+  return `${API_BASE_URL}/downloads/${id}/file?sessionId=${encodeURIComponent(getOrCreateSessionId())}`;
 }

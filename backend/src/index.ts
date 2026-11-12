@@ -17,6 +17,7 @@ app.use(
   cors({
     origin: env.corsOrigin,
     methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'x-session-id'],
   }),
 );
 app.use(express.json({ limit: '1mb' }));

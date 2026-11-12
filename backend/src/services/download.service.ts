@@ -24,6 +24,7 @@ interface InternalJob extends DownloadJob {
   process?: ChildProcess;
   filePath: string;
   paused: boolean;
+  sessionId: string;
   sourceUrl: string;
   streamUrl: string;
   kind: DownloadKind;
@@ -49,7 +50,7 @@ function sanitizeFilename(filename: string): string {
 }
 
 function toPublicJob(job: InternalJob): DownloadJob {
-  const { abortController: _abortController, filePath: _filePath, paused: _paused, ...publicJob } = job;
+  const { abortController: _abortController, filePath: _filePath, paused: _paused, sessionId: _sessionId, ...publicJob } = job;
   return publicJob;
 }
 
@@ -592,6 +593,7 @@ export function createDownloadJob(
   startTime?: number,
   endTime?: number,
   outputResolution?: string,
+  sessionId?: string,
 ): DownloadJob {
   ensureStagingDir();
 
@@ -617,6 +619,7 @@ export function createDownloadJob(
     abortController: new AbortController(),
     filePath,
     paused: false,
+    sessionId: sessionId || 'default',
     sourceUrl,
     streamUrl,
     kind,
@@ -634,20 +637,24 @@ export function createDownloadJob(
   return toPublicJob(job);
 }
 
-export function getDownloadJob(id: string): DownloadJob | null {
+export function getDownloadJob(id: string, sessionId?: string): DownloadJob | null {
   const job = jobs.get(id);
-  return job ? toPublicJob(job) : null;
+  if (!job || (sessionId && job.sessionId !== sessionId)) {
+    return null;
+  }
+  return toPublicJob(job);
 }
 
-export function listDownloadJobs(): DownloadJob[] {
+export function listDownloadJobs(sessionId?: string): DownloadJob[] {
   return Array.from(jobs.values())
+    .filter((job) => !sessionId || job.sessionId === sessionId)
     .sort((a, b) => b.startedAt - a.startedAt)
     .map(toPublicJob);
 }
 
-export function pauseDownloadJob(id: string): DownloadJob {
+export function pauseDownloadJob(id: string, sessionId?: string): DownloadJob {
   const job = jobs.get(id);
-  if (!job) {
+  if (!job || (sessionId && job.sessionId !== sessionId)) {
     throw new AppError('Download job not found.', 404);
   }
   if (job.status !== 'downloading' && job.status !== 'queued') {
@@ -672,9 +679,9 @@ export function pauseDownloadJob(id: string): DownloadJob {
   return toPublicJob(job);
 }
 
-export function resumeDownloadJob(id: string): DownloadJob {
+export function resumeDownloadJob(id: string, sessionId?: string): DownloadJob {
   const job = jobs.get(id);
-  if (!job) {
+  if (!job || (sessionId && job.sessionId !== sessionId)) {
     throw new AppError('Download job not found.', 404);
   }
   if (job.status !== 'paused') {
@@ -691,9 +698,9 @@ export function resumeDownloadJob(id: string): DownloadJob {
   return toPublicJob(job);
 }
 
-export function cancelDownloadJob(id: string): DownloadJob {
+export function cancelDownloadJob(id: string, sessionId?: string): DownloadJob {
   const job = jobs.get(id);
-  if (!job) {
+  if (!job || (sessionId && job.sessionId !== sessionId)) {
     throw new AppError('Download job not found.', 404);
   }
   if (job.status === 'completed' || job.status === 'cancelled') {
@@ -724,9 +731,9 @@ export function cancelDownloadJob(id: string): DownloadJob {
   return toPublicJob(job);
 }
 
-export function getDownloadFilePath(id: string): { filePath: string; filename: string } {
+export function getDownloadFilePath(id: string, sessionId?: string): { filePath: string; filename: string } {
   const job = jobs.get(id);
-  if (!job) {
+  if (!job || (sessionId && job.sessionId !== sessionId)) {
     throw new AppError('Download job not found.', 404);
   }
   if (job.status !== 'completed') {
@@ -736,7 +743,7 @@ export function getDownloadFilePath(id: string): { filePath: string; filename: s
 }
 
 // Background task to clean up old downloads after 10 minutes (and abandoned paused jobs after 1 hour)
-setInterval(() => {
+const cleanupInterval = setInterval(() => {
   const now = Date.now();
   const TEN_MINUTES_MS = 10 * 60 * 1000;
   const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -765,3 +772,9 @@ setInterval(() => {
     }
   }
 }, 60 * 1000); // Run check every 1 minute
+
+cleanupInterval.unref();
+
+
+
+cleanupInterval.unref();

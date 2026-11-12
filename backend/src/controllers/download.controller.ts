@@ -34,6 +34,7 @@ export const startDownload = asyncHandler(async (req: Request, res: Response) =>
       startTime,
       endTime,
       outputResolution,
+      req.sessionId,
     );
     res.status(201).json({ success: true, job });
   } catch (err) {
@@ -47,34 +48,34 @@ export const startDownload = asyncHandler(async (req: Request, res: Response) =>
 });
 
 export const getDownload = asyncHandler(async (req: Request, res: Response) => {
-  const job = getDownloadJob(req.params.id);
+  const job = getDownloadJob(req.params.id, req.sessionId);
   if (!job) {
     throw new AppError('Download job not found.', 404);
   }
   res.status(200).json({ success: true, job });
 });
 
-export const getAllDownloads = asyncHandler(async (_req: Request, res: Response) => {
-  const jobs = listDownloadJobs();
+export const getAllDownloads = asyncHandler(async (req: Request, res: Response) => {
+  const jobs = listDownloadJobs(req.sessionId);
   res.status(200).json({ success: true, jobs });
 });
 
 export const pauseDownload = asyncHandler(async (req: Request, res: Response) => {
-  const job = pauseDownloadJob(req.params.id);
+  const job = pauseDownloadJob(req.params.id, req.sessionId);
   res.status(200).json({ success: true, job });
 });
 
 export const resumeDownload = asyncHandler(async (req: Request, res: Response) => {
-  const job = resumeDownloadJob(req.params.id);
+  const job = resumeDownloadJob(req.params.id, req.sessionId);
   res.status(200).json({ success: true, job });
 });
 
 export const cancelDownload = asyncHandler(async (req: Request, res: Response) => {
-  const job = cancelDownloadJob(req.params.id);
+  const job = cancelDownloadJob(req.params.id, req.sessionId);
   res.status(200).json({ success: true, job });
 });
 
 export const fetchDownloadFile = asyncHandler(async (req: Request, res: Response) => {
-  const { filePath, filename } = getDownloadFilePath(req.params.id);
+  const { filePath, filename } = getDownloadFilePath(req.params.id, req.sessionId);
   res.download(filePath, filename);
 });

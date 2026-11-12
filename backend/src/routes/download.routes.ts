@@ -9,8 +9,11 @@ import {
   startDownload,
 } from '../controllers/download.controller';
 import { validateDownloadRequest } from '../middleware/validateRequest';
+import { requireSession } from '../middleware/sessionHandler';
 
 const router = Router();
+
+router.use(requireSession);
 
 router.get('/', getAllDownloads);
 router.post('/', validateDownloadRequest, startDownload);
